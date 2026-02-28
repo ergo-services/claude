@@ -79,6 +79,10 @@ Key metrics per process:
 - **Wakeups** -- Sleep->Running transitions
 - **Drain** -- MessagesIn/Wakeups ratio. ~1 = spare capacity. >>1 = batching under load
 
+### Node-Level Metrics
+
+`node_info` returns `LogMessages` -- cumulative log message counts as `[6]uint64` indexed by level: [0]=Trace, [1]=Debug, [2]=Info, [3]=Warning, [4]=Error, [5]=Panic. Use to detect error storms (Error/Panic growing fast) or excessive debug logging (Debug/Trace dominating). Trend with `sample_start tool=node_info` and compare deltas between reads.
+
 ### Build Tags
 
 - **-tags=pprof**: per-process goroutine stack traces via `pprof_goroutines pid=...`. Sleeping processes park their goroutine -- poll with sampler
@@ -162,7 +166,7 @@ Symptom: process keeps crashing, supervisor may exceed intensity.
 5. `sample_listen log_levels=["error","panic"] duration_sec=60` -- capture crashes
 6. `log_level_set target=<name> level=debug` -- increase logging
 
-Look for: Multiple processes in same app with uptime < 10s. Error/panic patterns in log stream.
+Look for: Multiple processes in same app with uptime < 10s. Error/panic patterns in log stream. Rising LogMessages[4] (Error) or LogMessages[5] (Panic) in `node_info`.
 
 ### Zombie Processes
 

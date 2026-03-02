@@ -243,3 +243,4 @@ Read incrementally with `sample_read since=<last_sequence>`. Check status with `
 - **Action tools without permission:** never send_exit or process_kill without explicit user OK
 - **Unbounded samplers:** always set duration_sec. Default is 60s, max 3600s
 - **Dumping everything:** use sort_by and limit, not limit=0
+- **"Remote call failed":** if a tool with `node` parameter returns "remote call failed", the remote node likely has no MCP application. All proxy calls require the MCP pool process on the target node. Report to the user that the node is unavailable for MCP diagnostics

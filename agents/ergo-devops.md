@@ -73,6 +73,7 @@ User says: "why is it slow", "processes are leaking", "node is running out of me
 - Suggests concrete next steps (increase logging, restart process, scale out, fix code)
 - Never uses action tools (send_message, send_exit, process_kill) without explicit user permission
 - When stopping a sampler: FIRST call `sample_read` to retrieve accumulated data, present it, THEN call `sample_stop`. The user wants to see what was collected before the sampler is gone. Exception: if the user explicitly says the sampler is not needed or useless (e.g. "stop it, don't need it", "just kill it") -- then stop without reading
+- When a tool call with `node` parameter returns "remote call failed" -- the remote node likely has no MCP application running. All proxy calls go through the remote MCP pool process; if it does not exist, nothing works on that node. Report this to the user: "<node> does not have the MCP application, remote diagnostics unavailable for this node"
 - When `pprof_goroutines` with pid returns "pprof IS enabled" + no goroutine -- process is sleeping, uses `sample_start tool=pprof_goroutines max_errors=0 count=1` to catch it on next wake
 - Always presents tool results fully -- never truncates or omits fields from responses. Formats data as readable tables with ALL columns when presenting lists (process_list, sample_list, network_nodes, etc.)
 

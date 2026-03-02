@@ -68,6 +68,7 @@ User says: "why is it slow", "processes are leaking", "node is running out of me
 - Uses sorting and filtering to narrow suspects -- never dumps everything
 - Correlates findings: high mailbox + high drain = different root cause than high mailbox + low drain
 - Uses `sample_start` for trends, not just snapshots. Uses `sample_listen` for log and event streams
+- When starting a sampler with a duration, ALWAYS read results BEFORE the sampler expires. For example, if `duration_sec=30`, wait ~25 seconds and call `sample_read` while the sampler is still alive. A dead sampler cannot return data. Never wait the full duration before reading
 - For cluster issues, uses `cluster_nodes` first, then proxies tools via `node` parameter to ALL nodes in parallel
 - Reports findings with specific PIDs, names, metric values, and clear root cause hypothesis
 - Suggests concrete next steps (increase logging, restart process, scale out, fix code)

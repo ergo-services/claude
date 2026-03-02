@@ -25,7 +25,7 @@ Diagnose and investigate production issues in running Ergo Framework distributed
 claude mcp add --transport http ergo http://localhost:9922/mcp
 ```
 
-All tools accept optional `node` parameter for cluster proxy -- request is forwarded to the remote node via native Ergo inter-node protocol.
+All tools accept optional `node` parameter for cluster proxy -- request is forwarded to the remote node via native Ergo inter-node protocol. The MCP endpoint node is just a proxy entry point, not a "primary" node. All nodes in the cluster are equal -- always use the `node` parameter explicitly for every node.
 
 ## Process Model Quick Reference
 
@@ -39,7 +39,7 @@ All tools accept optional `node` parameter for cluster proxy -- request is forwa
 |--------|---------|---------------|
 | MessagesMailbox | Current queue depth | Backpressure indicator |
 | MailboxLatency | Age of oldest message (needs -tags=latency) | Real latency, not just depth |
-| RunningTime | Cumulative callback time (ns) | CPU consumption |
+| RunningTime | Cumulative callback time (ns) | Utilization (NOT CPU usage). RunningTime/Uptime = how busy the actor is |
 | Wakeups | Sleep->Running transitions | Activity level |
 | Drain (MessagesIn/Wakeups) | Messages per wake cycle | ~1 = idle, >>1 = overloaded |
 | InitTime | ProcessInit duration (ns) | Slow startup detection |
@@ -78,6 +78,8 @@ sample_read sampler_id=mcp_sampler_xxx since=5     # incremental (seq > 5)
 sample_list     # all active samplers with full inspect data
 sample_stop sampler_id=mcp_sampler_xxx
 ```
+
+**Stopping a sampler:** always call `sample_read` first to retrieve accumulated data, present it to the user, then call `sample_stop`. Exception: if the user explicitly says the sampler is not needed (e.g. "stop it, don't need it", "just kill it") -- stop without reading.
 
 ## Diagnostic Playbooks
 
@@ -197,14 +199,17 @@ sample_stop sampler_id=mcp_sampler_xxx
 
 ### 9. Cluster Health Check
 
-**Quick assessment:**
-1. `cluster_nodes` -- all nodes
-2. `node_info` -- local summary
-3. `node_info` with `node` param -- for each remote node
-4. `network_nodes` -- inter-node traffic
-5. `registrar_resolve_app name=<critical_app>` -- deployment check
+**MANDATORY: cluster health = ALL nodes. Reporting only one node is WRONG.**
 
-Compare across nodes: uptime, process counts, memory, application states.
+1. `cluster_nodes` -- discover all nodes
+2. Query ALL nodes in parallel (one call per node, all in same message):
+   - `node_info node=<node1>`, `node_info node=<node2>`, ... ALL in parallel
+   - `app_list node=<node1>`, `app_list node=<node2>`, ... ALL in parallel
+   - `network_nodes` (from any node)
+3. Present comparison table: one row per node, columns: Uptime, Processes, Zombee, Spawned, Terminated, Heap, Goroutines, Errors, Panics
+4. Flag anomalies by comparing across rows
+
+NEVER report metrics from only one node.
 
 ## Real-Time Monitoring Setup
 

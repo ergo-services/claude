@@ -1,23 +1,17 @@
 ---
 name: ergo-devops
-description: Diagnose production issues in running Ergo Framework nodes via MCP server. Covers performance bottlenecks, process leaks, memory growth, restart loops, zombie processes, network failures, event system issues, goroutine deadlocks, and cluster health assessment. Use when investigating issues on live Ergo nodes.
+description: Diagnose production issues in running Ergo Framework nodes via MCP server. Covers performance bottlenecks, process leaks, memory issues, network problems, event fanout, restart loops, and stuck processes. Use when investigating issues on live Ergo nodes.
 ---
 
 # Ergo MCP DevOps
 
-Diagnose and investigate production issues in running Ergo Framework distributed systems. Connect to live nodes via MCP server and run diagnostic sequences.
+Diagnose production issues in running Ergo Framework distributed systems via MCP.
 
-## When to Use This Skill
+## Network Transparency
 
-- Investigating slow responses or growing queues
-- Finding process leaks (count growing without plateau)
-- Debugging restart loops (processes keep crashing)
-- Analyzing memory growth
-- Diagnosing network connectivity issues between nodes
-- Investigating event system problems (missing subscribers, fanout overload)
-- Detecting goroutine leaks or deadlocks
-- Running cluster-wide health checks
-- Setting up real-time monitoring sessions
+Every tool accepts `node` parameter -- the framework establishes connections automatically. Never call `network_connect` before querying. Just pass `node=<name>`.
+
+All nodes are equal. The MCP endpoint is just a proxy, not a primary node.
 
 ## MCP Connection
 
@@ -25,223 +19,191 @@ Diagnose and investigate production issues in running Ergo Framework distributed
 claude mcp add --transport http ergo http://localhost:9922/mcp
 ```
 
-All tools accept optional `node` parameter for cluster proxy -- request is forwarded to the remote node via native Ergo inter-node protocol. The MCP endpoint node is just a proxy entry point, not a "primary" node. All nodes in the cluster are equal -- always use the `node` parameter explicitly for every node.
-
-## Process Model Quick Reference
+## Process Model
 
 **States:** Init -> Sleep <-> Running -> Terminated. WaitResponse during sync Call. Zombee on forced kill.
 
-**Mailbox:** Urgent > System > Main > Log (priority order).
+| Metric | Meaning |
+|--------|---------|
+| MessagesMailbox | Current queue depth |
+| MailboxLatency | Age of oldest message (-tags=latency) |
+| RunningTime/Uptime | Utilization ratio (NOT CPU) |
+| Drain (MessagesIn/Wakeups) | ~1 = idle, >>1 = overloaded |
 
-**Key metrics:**
+**MailboxSize = -1** means unlimited (default). Can accumulate messages indefinitely → memory growth. If > 0, `ErrProcessMailboxFull` on overflow.
 
-| Metric | Meaning | Diagnostic Use |
-|--------|---------|---------------|
-| MessagesMailbox | Current queue depth | Backpressure indicator |
-| MailboxLatency | Age of oldest message (needs -tags=latency) | Real latency, not just depth |
-| RunningTime | Cumulative callback time (ns) | Utilization (NOT CPU usage). RunningTime/Uptime = how busy the actor is |
-| Wakeups | Sleep->Running transitions | Activity level |
-| Drain (MessagesIn/Wakeups) | Messages per wake cycle | ~1 = idle, >>1 = overloaded |
-| InitTime | ProcessInit duration (ns) | Slow startup detection |
+**Default Call timeout = 5 seconds.** WaitResponse > 5s is abnormal.
 
-## Sampler Quick Reference
+**LogMessages in node_info:** `[0]=Trace [1]=Debug [2]=Info [3]=Warning [4]=Error [5]=Panic`. Watch `[4]` and `[5]`.
 
-### Active (sample_start) -- periodic tool calls
+## Framework Internals
 
-```
-sample_start tool=<any_mcp_tool> arguments={...} interval_ms=5000 duration_sec=60
-```
+**Important Delivery errors:** `ErrProcessUnknown` = doesn't exist, `ErrProcessMailboxFull` = overloaded, `ErrTimeout` = ACK lost (5s), `ErrNoConnection` = unreachable.
 
-- Calls any MCP tool periodically, stores results in ring buffer
-- `count` -- stop after N successful results
-- `max_errors=0` -- ignore errors, keep retrying (useful for polling rare conditions)
-- Duration always applies as upper bound (default 60s, max 3600s)
+**Supervisor restart intensity:** Sliding window (default 5 restarts / 5 sec). Exceeded = supervisor dies with `ErrSupervisorRestartsExceeded`, cascades up. Inspect supervisor for `restarts_count`.
 
-### Passive (sample_listen) -- event-driven capture
+**Pool backpressure:** Capacity = PoolSize * WorkerMailboxSize. All full = messages dropped. Inspect pool for `messages_unhandled`.
 
-```
-sample_listen log_levels=["warning","error"] duration_sec=60
-sample_listen event=my_event duration_sec=60
-sample_listen log_levels=["error"] event=my_event duration_sec=60  # combined
-```
+**Connection pool:** Default 3 TCP connections per peer. Same sender = same TCP (ordered). Different senders = parallel. Pool size determined by **acceptor** (receiving side) during handshake. `PoolDSN` non-null = this side dialed. `Reconnections` counter = instability.
 
-### Reading
+**Goroutine labels (with -tags=pprof):** Actors: `{"pid":"<ABC.0.1005>"}`. Meta: `{"meta":"Alias#...", "role":"reader"}`.
 
-```
-sample_read sampler_id=mcp_sampler_xxx since=0     # all buffered
-sample_read sampler_id=mcp_sampler_xxx since=5     # incremental (seq > 5)
-```
+**Error counters in node_info:** `SendErrorsLocal` (process unknown/terminated/mailbox full), `SendErrorsRemote` (connection failures), `CallErrorsLocal`, `CallErrorsRemote`. Non-zero = problems.
 
-### Management
+**Connection counters in network_info:** `ConnectionsEstablished - ConnectionsLost = active`. Growing `ConnectionsLost` = instability. `HandshakeErrors` = auth problems.
+
+**Shutdown:** Processes >5s per message are logged. `state=running, queue=0` = stuck in callback.
+
+## Tools Quick Reference
+
+### Profiling (use filter/exclude on remote nodes)
 
 ```
-sample_list     # all active samplers with full inspect data
-sample_stop sampler_id=mcp_sampler_xxx
+pprof_goroutines debug=1 filter="ProcessRun" exclude="toolPprof" limit=20   # actor goroutines
+pprof_goroutines debug=2 filter="<behavior>" limit=5                         # specific actor trace
+pprof_cpu duration=5 exclude="runtime" limit=15                              # CPU hotspots
+pprof_heap limit=20 filter="myapp"                                           # memory allocators
 ```
 
-**Stopping a sampler:** always call `sample_read` first to retrieve accumulated data, present it to the user, then call `sample_stop`. Exception: if the user explicitly says the sampler is not needed (e.g. "stop it, don't need it", "just kill it") -- stop without reading.
+All pprof tools support `filter` (include matching) and `exclude` (remove matching) by substring.
+Response header shows `total N, matched M, showing K`.
+
+### Network
+
+```
+network_ping name=<node>                           # quick alive check with RTT
+network_node_info node=A name=B                    # A's view of connection to B
+network_node_info node=B name=A                    # B's view (always check BOTH sides)
+```
+
+Connection info includes `Reconnections` counter -- non-zero indicates instability.
+
+### Samplers
+
+```
+sample_start tool=<tool> arguments={...} interval_ms=2000 duration_sec=60 linger_sec=30
+sample_listen log_levels=["warning","error"] duration_sec=60 linger_sec=30
+sample_read sampler_id=<id>
+sample_list                                         # shows "completed, lingering Ns"
+sample_stop sampler_id=<id>                         # immediate terminate
+```
+
+`linger_sec` (default 30): sampler stays alive after completion for data retrieval. No rush to read before duration expires.
+
+Passive samplers also capture messages and calls sent to them -- use as test receivers: `send_message to=<sampler_id> type_name=X message={...}`, then `sample_read` to see captured entries with `from`, `type`, `message`.
+
+**Stopping:** read data first (`sample_read`), present to user, then `sample_stop`. Exception: user says "just kill it".
+
+### Typed Messages
+
+```
+message_types filter="order"                                    # discover types
+message_type_info type_name="TestOrder"                         # inspect fields
+send_message to=<target> type_name="TestOrder" message={...}    # send typed struct
+call_process to=<target> type_name="GetStatusRequest" request={...}  # sync call
+```
+
+Short name works (e.g., `TestOrder`). Go→JSON: string→`"v"`, number→`42.5`, bool→`true`, *T→value or `null`, []T→`[...]`, map→`{...}`, struct→nested `{...}`.
+
+### Proxy Timeout
+
+All tools accept `timeout` parameter (seconds, default 30, max 120) for remote calls. Use higher timeout for heavy operations:
+```
+pprof_cpu node=X duration=10 timeout=60
+pprof_goroutines node=X debug=2 limit=100 timeout=60
+```
 
 ## Diagnostic Playbooks
 
-### 1. Performance Bottleneck
+### 1. Cluster Health
 
-**Symptom:** slow responses, growing queues.
+1. `cluster_nodes` -- discover all
+2. In parallel: `node_info node=X` + `network_ping name=X` for every node
+3. Table: Node, Uptime, Processes, Zombee, Heap, Errors, Ping RTT
+4. Flag anomalies by comparing rows
 
-**Investigation:**
-1. `process_list sort_by=mailbox limit=10` -- deepest mailboxes
-2. `process_list sort_by=drain limit=10` -- highest drain ratio
-3. `process_info` on suspect -- queue sizes, links
-4. `runtime_stats` -- GC pressure
-5. Trend: `sample_start tool=process_list arguments={"sort_by":"mailbox","limit":5} interval_ms=2000`
+### 2. Performance Bottleneck
 
-**Pattern matching:**
+1. `process_list sort_by=mailbox limit=10` -- find suspects
+2. Pattern: High mailbox + high drain = overloaded. High mailbox + low drain = slow callbacks
+3. `pprof_cpu duration=5 exclude="runtime"` -- where is CPU spent?
+4. `process_info` on suspect -- confirm with queue sizes
 
-| Mailbox | Drain | Root Cause | Fix |
-|---------|-------|-----------|-----|
-| High | High (>>1) | Message rate > processing | Pool, load shedding |
-| High | Low (~1) | Slow callbacks | Optimize code |
-| Low | High | Burst handling OK | Monitor, may be transient |
+### 3. CPU Profiling
 
-### 2. Process Leak
+**Snapshot:** `pprof_cpu duration=5 limit=20` -- top functions
 
-**Symptom:** ProcessesTotal keeps growing.
+**Application only:** `pprof_cpu duration=5 filter="myapp" exclude="runtime"` -- filter noise
 
-**Investigation:**
-1. `node_info` -- ProcessesSpawned vs ProcessesTerminated
-2. `process_list max_uptime=60 limit=50` -- recently spawned
-3. `process_children parent=<supervisor> recursive=true` -- subtree sizes
-4. `app_list` -- per-app process counts
-5. Trend: `sample_start tool=node_info interval_ms=10000 duration_sec=300`
+**Continuous (goroutine sampling):**
+```
+sample_start tool=pprof_goroutines arguments={"debug":1,"filter":"ProcessRun","exclude":"toolPprof","limit":20} interval_ms=500 duration_sec=30
+```
 
-**Red flags:** Spawned >> Terminated. Nameless processes accumulating. App with abnormal process count.
+### 4. Memory Growth
 
-### 3. Restart Loop
-
-**Symptom:** process keeps crashing.
-
-**Investigation:**
-1. `process_list max_uptime=10 limit=50` -- very young processes
-2. `process_inspect` on supervisor -- restarts_count
-3. `sample_listen log_levels=["error","panic"] duration_sec=60` -- crash patterns
-4. `log_level_set target=<name> level=debug` -- increase logging
-
-**Red flags:** Multiple processes with uptime < 10s. Growing restarts_count. Repeating error in log stream.
-
-### 4. Zombie Processes
-
-**Symptom:** processes in Zombee state.
-
-**Investigation:**
-1. `process_list state=zombee`
-2. `process_info` on zombie -- parent, links
-3. `process_state` on parent -- alive?
-4. Catch stack: `sample_start tool=pprof_goroutines arguments={"pid":"<PID>"} interval_ms=300 count=1 max_errors=0 duration_sec=30`
-
-**Red flags:** Goroutine stuck on channel/mutex = blocking in actor callback (forbidden). Parent in Running state = stuck callback.
-
-### 5. Memory Growth
-
-**Symptom:** heap_alloc keeps increasing.
-
-**Investigation:**
-1. `runtime_stats` -- snapshot
-2. `pprof_heap` -- top allocators
+1. `pprof_heap limit=20` -- top allocators (inuse + cumulative alloc columns)
+2. `runtime_stats` -- heap_alloc, num_gc
 3. Trend: `sample_start tool=runtime_stats interval_ms=5000 duration_sec=300`
-4. `process_list sort_by=mailbox limit=10` -- message accumulation
-5. `pprof_goroutines limit=200 debug=1` -- goroutine leak
 
-**Red flags:** heap_alloc growing without GC recovery. heap_objects growing = object leak. Goroutine count growing. Deep mailboxes = messages piling up.
+### 5. Process Leak
 
-### 6. Network Issues
+1. `node_info` -- Spawned vs Terminated
+2. `process_list max_uptime=60 limit=50` -- recent spawns
+3. Trend: `sample_start tool=node_info interval_ms=10000`
 
-**Symptom:** remote calls timeout.
+### 6. Restart Loop
 
-**Investigation:**
-1. `cluster_nodes` -- overview
-2. `network_nodes` -- traffic counts
-3. `network_node_info name=<suspect>` -- connection details
-4. `registrar_info` + `registrar_resolve name=<node>` -- route resolution
-5. `network_connect name=<target>` -- try connecting
+1. `process_list max_uptime=10 limit=50` -- very young processes
+2. `sample_listen log_levels=["error","panic"] duration_sec=60`
+3. `process_inspect` on supervisor -- restarts_count
 
-**Pattern matching:**
+### 7. Zombie Processes
+
+1. `process_list state=zombee`
+2. `pprof_goroutines debug=2 filter="<behavior_name>" limit=5` -- find by behavior name
+
+### 8. Network Issues
+
+**Always check both sides:**
+```
+network_node_info node=A name=B   # A's view
+network_node_info node=B name=A   # B's view
+```
 
 | Symptom | Root Cause |
 |---------|-----------|
-| Discovered, not connected | Route exists, connection fails |
-| No bytes_in | Connection dead |
-| Low ConnectionUptime | Flapping |
-| Messages_out >> messages_in | One-directional failure |
+| Ping fails or RTT > 1s | Connection problem or overloaded node |
+| MessagesOut >> MessagesIn (cross-check) | Silent data loss |
+| High Reconnections | Unstable connection |
 
-### 7. Event System Issues
+### 9. Goroutine Investigation
 
-**Symptom:** events publishing to void, missing subscribers.
+```
+pprof_goroutines debug=1 filter="ProcessRun" exclude="toolPprof" limit=20    # actors only
+pprof_goroutines debug=2 filter="waitResponse" limit=10                       # stuck in Call
+pprof_goroutines debug=1 exclude="runtime_pollWait" limit=30                  # non-IO goroutines
+```
 
-**Investigation:**
+### 10. Event System
+
 1. `event_list utilization_state=no_subscribers` -- wasted publishing
-2. `event_list utilization_state=no_publishing` -- waiting subscribers
-3. `event_list sort_by=subscribers limit=10` -- highest fanout
-4. `event_list producer=<name>` -- all events owned by a specific process
-5. `event_info name=<suspect>` -- producer, subscribers
-6. `sample_listen event=<suspect> duration_sec=30` -- see published data
+2. `event_list sort_by=subscribers limit=10` -- highest fanout
+3. `sample_listen event=<name> duration_sec=30` -- see data
 
-### 8. Goroutine Investigation
-
-**Symptom:** deadlock suspected, goroutine count growing.
-
-**Investigation:**
-1. `runtime_stats` -- goroutine count
-2. `pprof_goroutines debug=1 limit=100` -- summary by stack
-3. `pprof_goroutines debug=2 limit=50` -- full traces
-4. Catch specific actor: `sample_start tool=pprof_goroutines arguments={"pid":"<PID>"} interval_ms=300 count=1 max_errors=0 duration_sec=30`
-5. `process_list state=wait_response` -- stuck in sync Call
-
-**Red flags:** `chanrecv`/`chansend` = channel deadlock. `sync.Mutex.Lock` = forbidden in actors. Multiple wait_response = circular Call dependency.
-
-### 9. Cluster Health Check
-
-**MANDATORY: cluster health = ALL nodes. Reporting only one node is WRONG.**
-
-1. `cluster_nodes` -- discover all nodes
-2. Query ALL nodes in parallel (one call per node, all in same message):
-   - `node_info node=<node1>`, `node_info node=<node2>`, ... ALL in parallel
-   - `app_list node=<node1>`, `app_list node=<node2>`, ... ALL in parallel
-   - `network_nodes` (from any node)
-3. Present comparison table: one row per node, columns: Uptime, Processes, Zombee, Spawned, Terminated, Heap, Goroutines, Errors, Panics
-4. Flag anomalies by comparing across rows
-
-NEVER report metrics from only one node.
-
-## Real-Time Monitoring Setup
-
-Start multiple samplers for continuous monitoring:
-
-```
-sample_start tool=node_info interval_ms=10000 duration_sec=600
-sample_start tool=runtime_stats interval_ms=5000 duration_sec=600
-sample_start tool=process_list arguments={"sort_by":"mailbox","limit":10} interval_ms=2000 duration_sec=600
-sample_start tool=process_list arguments={"sort_by":"running_time","limit":10} interval_ms=5000 duration_sec=600
-sample_listen log_levels=["error","panic"] duration_sec=600
-sample_start tool=network_nodes interval_ms=30000 duration_sec=600
-```
-
-Read incrementally with `sample_read since=<last_sequence>`. Check status with `sample_list`.
-
-## Build Tag Awareness
+## Build Tags
 
 | Tag | Enables | Without It |
 |-----|---------|-----------|
-| `-tags=pprof` | `pprof_goroutines pid=...` for per-process stack traces | pid param returns error |
-| `-tags=latency` | MailboxLatency measurement, `mailbox_latency` sort/filter | Latency fields return -1 |
-
-**Sleeping process + pprof:** goroutine is parked, won't appear in dump. Use `sample_start tool=pprof_goroutines arguments={"pid":"..."} interval_ms=300 count=1 max_errors=0` to poll until it wakes up.
+| `-tags=pprof` | Per-process goroutine traces | pid param errors |
+| `-tags=latency` | MailboxLatency measurement | Returns -1 |
 
 ## Common Mistakes
 
-- **Snapshot vs trend:** single `process_list` shows one moment. Use samplers for trends over time
-- **pprof "not found" vs sleeping:** error says "pprof IS enabled" = process sleeping, not missing tag. Poll with sampler
-- **Mailbox depth without drain:** same depth has different causes at different drain ratios
-- **Action tools without permission:** never send_exit or process_kill without explicit user OK
-- **Unbounded samplers:** always set duration_sec. Default is 60s, max 3600s
-- **Reading after expiry:** always call `sample_read` BEFORE the sampler's duration expires. A dead sampler cannot return data. For `duration_sec=30`, read at ~25 seconds
-- **Dumping everything:** use sort_by and limit, not limit=0
-- **"Remote call failed":** if a tool with `node` parameter returns "remote call failed", the remote node likely has no MCP application. All proxy calls require the MCP pool process on the target node. Report to the user that the node is unavailable for MCP diagnostics
+- **Connecting before querying** -- never use `network_connect` just to query, framework connects automatically
+- **Unfiltered pprof on remote** -- too large, will timeout. Always use filter/exclude
+- **One-sided network check** -- always compare both sides of connection
+- **Snapshot vs trend** -- use samplers for trends, not just single queries
+- **Missing timeout** -- use `timeout=60` for heavy remote operations
+- **pprof "not found"** -- sleeping processes park goroutines, use sampler to poll
+- **Dumping everything** -- always use sort_by, limit, filter

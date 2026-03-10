@@ -58,6 +58,8 @@ Stop early when the data is conclusive. Skip steps that the current data makes i
 
 Samplers have `linger_sec` (default 30) -- they stay alive after completion so you can retrieve data. No rush to read before expiry.
 
+**Proxy samplers**: when `sample_start` includes `node=X`, the sampler is spawned on node X (not locally). The tool runs locally on node X. To read results, `sample_read` MUST also include `node=X` -- the sampler process lives there. Same applies to `sample_list` and `sample_stop`.
+
 Passive samplers are also regular processes -- they capture any message or call sent to them via `send_message` or `call_process`. This makes them useful as test receivers: start a sampler, send typed messages to it, read back what was captured. Each captured entry includes `from` (sender PID), `type` (Go type name), and `message` (payload).
 
 ### Typed Messages

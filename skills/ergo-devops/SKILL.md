@@ -90,6 +90,8 @@ sample_stop sampler_id=<id>                         # immediate terminate
 
 `linger_sec` (default 30): sampler stays alive after completion for data retrieval. No rush to read before duration expires.
 
+**Proxy samplers**: `sample_start` with `node=X` spawns the sampler on node X. The tool runs locally on X. To read/list/stop, `sample_read`/`sample_list`/`sample_stop` MUST also include `node=X`.
+
 Passive samplers also capture messages and calls sent to them -- use as test receivers: `send_message to=<sampler_id> type_name=X message={...}`, then `sample_read` to see captured entries with `from`, `type`, `message`.
 
 **Stopping:** read data first (`sample_read`), present to user, then `sample_stop`. Exception: user says "just kill it".

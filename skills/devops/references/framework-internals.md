@@ -48,7 +48,7 @@ If `messages_unhandled` is growing:
 - Increase `PoolSize` or `WorkerMailboxSize` (requires restart or an admin message to the Pool).
 - Or shed load upstream — the Pool has no way to signal "slow down" to senders.
 
-See `skills/ergo-framework/references/pool.md` for the design-side semantics.
+See `skills/framework/references/pool.md` for the design-side semantics.
 
 ## Connection Pool (Inter-Node TCP)
 

@@ -1,5 +1,5 @@
 ---
-name: ergo-framework
+name: framework
 description: Build distributed actor-based systems with Ergo Framework in Go. Covers actor lifecycle, supervision, message patterns, meta processes for I/O, cluster configuration, EDF serialization, unit testing with fluent assertions, and extension libraries (health, leader, metrics, mcp, observer, pulse, radar). Use when implementing Ergo applications or working with actor-based distributed systems.
 ---
 

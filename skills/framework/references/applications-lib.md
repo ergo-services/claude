@@ -4,14 +4,14 @@ Four ready-to-run applications for observability and diagnostics. Each is a sepa
 
 | Module | Package | Purpose |
 |--------|---------|---------|
-| `ergo.services/application/mcp` | `mcp` | MCP diagnostics sidecar (powers the `ergo-devops` agent) |
+| `ergo.services/application/mcp` | `mcp` | MCP diagnostics sidecar (powers the `devops` agent) |
 | `ergo.services/application/observer` | `observer` | Web dashboard for live node state |
 | `ergo.services/application/pulse` | `pulse` | OTLP tracing exporter |
 | `ergo.services/application/radar` | `radar` | Bundled health + metrics endpoint |
 
 ## mcp — Diagnostics Sidecar
 
-Exposes 46+ inspection tools over HTTP via MCP (Model Context Protocol). Enables AI agents (Claude Code, specifically the `ergo-devops` agent) to diagnose bottlenecks, inspect processes, run pprof, monitor metrics, and perform actions (send messages, kill processes) on live nodes without restarts. Supports cluster-wide proxying: pass `node=X` on any tool and MCP forwards to that node via native Ergo networking.
+Exposes 46+ inspection tools over HTTP via MCP (Model Context Protocol). Enables AI agents (Claude Code, specifically the `devops` agent) to diagnose bottlenecks, inspect processes, run pprof, monitor metrics, and perform actions (send messages, kill processes) on live nodes without restarts. Supports cluster-wide proxying: pass `node=X` on any tool and MCP forwards to that node via native Ergo networking.
 
 **When to use:** always, in every environment. Read-only in production.
 
@@ -60,7 +60,7 @@ Agent-mode nodes don't run HTTP; they serve inspection requests forwarded from a
 claude mcp add --transport http ergo http://localhost:9922/mcp
 ```
 
-See the `ergo-devops` agent and `ergo-devops` skill for diagnostic playbooks using these tools.
+See the `devops` agent and `devops` skill for diagnostic playbooks using these tools.
 
 ## observer — Web Dashboard
 

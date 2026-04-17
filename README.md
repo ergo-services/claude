@@ -4,8 +4,8 @@ Claude Code agents and skills for building and operating distributed actor-based
 
 Two complementary pairs:
 
-- **ergo-framework** — designing and implementing actor systems (build-time).
-- **ergo-devops** — diagnosing running clusters via the MCP application (runtime).
+- **framework** — designing and implementing actor systems (build-time).
+- **devops** — diagnosing running clusters via the MCP application (runtime).
 
 Each pair is split into an **agent** (behaviour / policy / decision logic) and a **skill** (compact reference data, API surface, playbooks). The agent is slim and decides *what to do*; the skill is loaded progressively and answers *what the code actually says*.
 
@@ -13,11 +13,14 @@ Each pair is split into an **agent** (behaviour / policy / decision logic) and a
 
 ```
 claude/
+├── .claude-plugin/
+│   ├── plugin.json
+│   └── marketplace.json
 ├── agents/
-│   ├── ergo-framework-architect.md
-│   └── ergo-devops.md
+│   ├── framework-architect.md
+│   └── devops.md
 └── skills/
-    ├── ergo-framework/
+    ├── framework/
     │   ├── SKILL.md                       # navigation + critical rules
     │   └── references/
     │       ├── actors.md                  # lifecycle, mailbox, Link/Monitor, Alias, Events
@@ -35,7 +38,7 @@ claude/
     │       ├── meta-lib.md                # meta/websocket, meta/sse
     │       ├── integrations.md            # registrar/etcd, saturn, logger/colored, rotate
     │       └── erlang-protocol.md         # proto/erlang23 (EPMD, ETF, DIST)
-    └── ergo-devops/
+    └── devops/
         ├── SKILL.md                       # navigation + critical rules
         └── references/
             ├── tools.md                   # full MCP tool catalog (48 tools, 11 categories)
@@ -61,7 +64,7 @@ Total working-set ≈ 8–13 KB vs ~17 KB monolithic; detail per topic is higher
 
 ## Pair Comparison
 
-| | ergo-framework | ergo-devops |
+| | framework | devops |
 |--|---|---|
 | **Purpose** | Design and implement actor systems | Diagnose running clusters |
 | **Invoked when** | Designing an actor architecture, writing a test, choosing a supervisor strategy | Investigating a production issue, reading counters, running `pprof` |
@@ -76,12 +79,12 @@ One-shot install from the official repo, updates handled by Claude Code:
 
 ```bash
 /plugin marketplace add ergo-services/claude
-/plugin install dev@ergo-services
+/plugin install ergo@ergo-services
 ```
 
-After install, agents and skills are namespaced under the plugin — invoke the skill as `/ergo-framework` / `/ergo-devops`, agents by their trigger phrases.
+After install, agents and skills are namespaced under the plugin — invoke skills as `/ergo:framework` / `/ergo:devops`; agents pick themselves up from trigger phrases.
 
-Update later with `/plugin update`, remove with `/plugin uninstall dev@ergo-services`.
+Update later with `/plugin update`, remove with `/plugin uninstall ergo@ergo-services`.
 
 ### Manual (development / fork / offline)
 
@@ -95,12 +98,12 @@ cd path/to/ergo.services/claude
 mkdir -p ~/.claude/agents ~/.claude/skills
 
 # Agents
-ln -sf $(pwd)/agents/ergo-framework-architect.md ~/.claude/agents/
-ln -sf $(pwd)/agents/ergo-devops.md              ~/.claude/agents/
+ln -sf $(pwd)/agents/framework-architect.md ~/.claude/agents/
+ln -sf $(pwd)/agents/devops.md              ~/.claude/agents/
 
 # Skills (directories — references/ is picked up transitively)
-ln -sf $(pwd)/skills/ergo-framework ~/.claude/skills/
-ln -sf $(pwd)/skills/ergo-devops    ~/.claude/skills/
+ln -sf $(pwd)/skills/framework ~/.claude/skills/
+ln -sf $(pwd)/skills/devops    ~/.claude/skills/
 ```
 
 #### Copy
@@ -112,7 +115,7 @@ cp -r skills/* ~/.claude/skills/
 
 ## Usage
 
-### ergo-framework-architect (Agent)
+### framework-architect (Agent)
 
 Designs Ergo Framework applications with DDD bounded contexts, supervision trees, and cluster topology. Outputs an implementable design document.
 
@@ -124,7 +127,7 @@ Designs Ergo Framework applications with DDD bounded contexts, supervision trees
 
 **Output** — a design document with bounded context, cluster topology, supervision tree, data structures, message flow, load analysis, and implementation phases.
 
-### ergo-devops (Agent)
+### devops (Agent)
 
 Connects to running Ergo nodes via the MCP application and runs hypothesis-driven investigations. Never mutates state without explicit user permission.
 
@@ -148,17 +151,17 @@ Connects to running Ergo nodes via the MCP application and runs hypothesis-drive
 
 **Requires** — `ergo.services/application/mcp` running on each node under inspection.
 
-### ergo-framework (Skill)
+### framework (Skill)
 
-Reference for implementing Ergo Framework applications. Load via `/ergo-framework` or automatically when the topic matches. Follow the navigation table in `SKILL.md` to pull in only the needed `references/*.md`.
+Reference for implementing Ergo Framework applications. Load via `/ergo:framework` or automatically when the topic matches. Follow the navigation table in `SKILL.md` to pull in only the needed `references/*.md`.
 
-### ergo-devops (Skill)
+### devops (Skill)
 
-Reference for diagnosing live Ergo nodes. Load via `/ergo-devops`. Navigation table lists 7 topic files — tool catalog, process model, counters, framework internals, playbooks, samplers, build tags.
+Reference for diagnosing live Ergo nodes. Load via `/ergo:devops`. Navigation table lists 7 topic files — tool catalog, process model, counters, framework internals, playbooks, samplers, build tags.
 
 ## MCP Application Setup
 
-The `ergo-devops` pair requires the MCP application on the target node:
+The `devops` pair requires the MCP application on the target node:
 
 ```go
 import "ergo.services/application/mcp"
@@ -194,7 +197,7 @@ Every MCP tool accepts a `node` proxy parameter — pass `node=<name>` and the r
 | `-tags=verbose` | Verbose framework-internal logging |
 | `-tags=norecover` | **Disables** panic recovery (debug only) |
 
-See `skills/ergo-devops/references/build-tags.md` for detail.
+See `skills/devops/references/build-tags.md` for detail.
 
 ## Reference
 
@@ -209,4 +212,4 @@ ls $(go env GOMODCACHE)/ergo.services/ergo@*/docs/
 
 - Claude Code CLI
 - Ergo Framework v3.3+
-- For `ergo-devops`: `ergo.services/application/mcp` running on every node you want to inspect
+- For `devops`: `ergo.services/application/mcp` running on every node you want to inspect

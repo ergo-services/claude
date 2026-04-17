@@ -1,11 +1,11 @@
 ---
-name: ergo-devops
+name: devops
 description: Diagnose production issues on running Ergo Framework nodes via MCP server. Covers performance bottlenecks, process leaks, memory growth, network problems, event fanout, restart loops, and stuck processes. Provides 48 inspection tools, liveness analysis, active/passive sampling, and typed-message actions. Use when investigating issues on live Ergo nodes.
 ---
 
 # Ergo DevOps
 
-Diagnose production issues in running Ergo Framework distributed systems via the MCP application (`ergo.services/application/mcp`). This skill is the operational counterpart to `ergo-framework` — it assumes the system is running and something is suspect.
+Diagnose production issues in running Ergo Framework distributed systems via the MCP application (`ergo.services/application/mcp`). This skill is the operational counterpart to the `framework` skill — it assumes the system is running and something is suspect.
 
 ## MCP Connection
 

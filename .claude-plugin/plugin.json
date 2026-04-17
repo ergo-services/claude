@@ -1,7 +1,7 @@
 {
-  "name": "dev",
+  "name": "ergo",
   "version": "1.0.0",
-  "description": "Agents and skills for building and operating distributed actor-based systems with Ergo Framework (v3.3+). Includes ergo-framework-architect (design), ergo-devops (diagnostics), and matching skills with progressive-disclosure reference files.",
+  "description": "Agents and skills for building and operating distributed actor-based systems with Ergo Framework (v3.3+). Includes framework-architect (design), devops (diagnostics), and matching skills with progressive-disclosure reference files.",
   "author": {
     "name": "Ergo Services"
   },

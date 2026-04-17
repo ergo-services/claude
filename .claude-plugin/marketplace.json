@@ -5,7 +5,7 @@
   },
   "plugins": [
     {
-      "name": "dev",
+      "name": "ergo",
       "source": "./",
       "description": "Agents and skills for building and operating distributed actor-based systems with Ergo Framework (v3.3+)",
       "version": "1.0.0"

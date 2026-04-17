@@ -1,0 +1,11 @@
+{
+  "name": "dev",
+  "version": "1.0.0",
+  "description": "Agents and skills for building and operating distributed actor-based systems with Ergo Framework (v3.3+). Includes ergo-framework-architect (design), ergo-devops (diagnostics), and matching skills with progressive-disclosure reference files.",
+  "author": {
+    "name": "Ergo Services"
+  },
+  "homepage": "https://github.com/ergo-services/claude",
+  "repository": "https://github.com/ergo-services/claude",
+  "license": "MIT"
+}

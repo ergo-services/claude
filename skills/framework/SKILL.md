@@ -13,20 +13,24 @@ When a signature or constant must be exact, verify at the source: `$(go env GOMO
 
 | Topic | File | When to read |
 |-------|------|--------------|
-| Actor lifecycle, mailbox, HandleMessage/Call/Event, Link/Monitor/Alias, Events | `references/actors.md` | Implementing any actor |
-| Supervisor types, restart strategies, intensity, Significant, KeepOrder, dynamic children | `references/supervision.md` | Designing supervision trees |
-| Send/Call, SendImportant/CallImportant, FR-2PC, priorities, compression, fallbacks | `references/messages.md` | Wiring messages between actors or nodes |
-| ApplicationSpec, Mode, Load(node, args), lifecycle, Depends, Tags, Map | `references/application.md` | Building an application |
-| PoolOptions, AddWorkers/RemoveWorkers, worker mailbox, when NOT to use | `references/pool.md` | High message load |
+| Actor lifecycle, mailbox, HandleMessage/Call/Event, Link/Monitor/Alias, Events, CoreEvent bus | `references/actors.md` | Implementing any actor |
+| Supervisor types, restart strategies, intensity, Significant, KeepOrder, per-child restart, dynamic children | `references/supervision.md` | Designing supervision trees |
+| Send/Call, important delivery, priorities, compression, fallbacks, MessageOptions | `references/messages.md` | Wiring messages between actors or nodes |
+| Embed app.Application, Load(args), Init/Start/Stop lifecycle, ApplicationSpec, Depends, Tags, Map | `references/application.md` | Building an application |
+| Pool, act.Router (message routing), act.WebWorker, AddWorkers/RemoveWorkers, when NOT to use | `references/pool.md` | High message load, routing, web handlers |
 | TCPServer, TCPConnection, UDPServer, WebServer, Port, ProcessPool routing, meta limitations | `references/meta.md` | I/O integration |
-| NodeOptions, NetworkOptions, Security, Tracing, Cron, CertManager, TargetManager | `references/node.md` | Node configuration, security, observability |
-| EDF RegisterTypeOf, Marshaler, size limits, visibility matrix | `references/edf.md` | Cross-node message types |
-| etcd vs Saturn, Resolver, Routes, Tags, proxy, NetworkFlags | `references/cluster.md` | Distributed deployment |
-| `ergo/testing/unit`: Spawn, Should*, matchers, failure injection, network simulation | `references/testing.md` | Writing actor tests |
+| NodeOptions, NetworkOptions, NetworkFlags defaults, Security, CertManager/TLS, Events, TargetManager | `references/node.md` | Node configuration, security, TLS |
+| gen.Log, LogLevel, structured fields, custom LoggerBehavior | `references/logging.md` | Logging from actors, custom loggers |
+| Tracing samplers, business spans (StartTracingSpan), exporters, TracingFlags | `references/tracing.md` | Distributed tracing, custom spans |
+| gen.Cron, CronJob, cron actions, MessageCron, fallbacks | `references/cron.md` | Scheduled jobs |
+| gen sentinels, TerminateReason*, gen.Errorf, matching with errors.Is | `references/errors.md` | Matching errors and termination reasons |
+| Network().RegisterType, schema evolution, ApplicationSpec.Network, visibility matrix | `references/edf.md` | Cross-node message types |
+| etcd vs Saturn, Registrar interface, ResolveApplication filters, Routes, proxy, NetworkFlags | `references/cluster.md` | Distributed deployment |
+| testing/unit (Spawn, Should*), testing/stage (multi-node), testing/check, testing/mock | `references/testing.md` | Writing actor tests |
 | actor/health (K8s probes), actor/leader (Raft election), actor/metrics (Prometheus) | `references/actor-lib.md` | Operational actors |
 | application/mcp (diagnostics), observer (web UI), pulse (OTLP), radar (bundle) | `references/applications-lib.md` | Observability and diagnostics |
 | meta/websocket, meta/sse | `references/meta-lib.md` | WebSocket / SSE servers |
-| registrar/etcd, registrar/saturn, logger/colored, logger/rotate | `references/integrations.md` | External service integrations |
+| registrar/etcd, registrar/saturn, logger/colored, logger/rotate, logger/sentry | `references/integrations.md` | External service integrations |
 | proto/erlang23 (EPMD, ETF, DIST) | `references/erlang-protocol.md` | Interop with Erlang/OTP nodes |
 
 ## Critical Rules
@@ -34,8 +38,8 @@ When a signature or constant must be exact, verify at the source: `$(go env GOMO
 Non-negotiable. A violation is always a bug.
 
 1. **No blocking inside actor callbacks.** No mutex, no channel send/receive, no blocking I/O, no `time.Sleep`, no spawned goroutines. Callbacks run on the mailbox dispatcher and must return quickly.
-2. **EDF types are registered in `init()` — never after node start.** Register nested types before parents. All cross-node struct fields must be Exported.
-3. **Meta processes cannot `Call`, cannot create Link/Monitor.** They can only receive links/monitors and send async messages.
+2. **EDF types are registered in `init()` - never after node start.** Register nested types before parents. All cross-node struct fields must be Exported.
+3. **Meta processes cannot initiate `Call` and cannot create Link/Monitor.** They can receive Call (`HandleCall`), receive links/monitors, and send async messages. A synchronous Call to a stock meta blocks (its default HandleCall sends no response).
 4. **Production clusters use a central registrar.** Embedded registrar is dev-only. Pick etcd (≤ 70 nodes) or Saturn (100+).
 5. **Actors do not share state.** Messages carry copies; never leak mutable struct pointers across actor boundaries.
 
@@ -43,6 +47,7 @@ Non-negotiable. A violation is always a bug.
 
 - Async messages: `MessageXXX` (e.g., `MessageIncrement`, `MessageShutdown`).
 - Sync calls: `XXXRequest` / `XXXResponse` (e.g., `GetStatusRequest` / `GetStatusResponse`).
+- A reusable actor or application exposes a package-level helper API - `func Action(process gen.Process, ...) error` wrapping Send/Call (or `gen.Node` for node-level callers such as a web server) - so callers never hand-craft messages or hardcode process names. See `references/application.md`.
 - Use `any`, not `interface{}`.
 - No emojis in documentation.
 
@@ -70,6 +75,7 @@ The framework version is `gen.Version` in `ergo/version.go`.
 | Saturn registrar | `ergo.services/registrar/saturn` |
 | Colored logger | `ergo.services/logger/colored` |
 | Rotating logger | `ergo.services/logger/rotate` |
+| Sentry logger | `ergo.services/logger/sentry` |
 | MCP diagnostics | `ergo.services/application/mcp` |
 | Observer dashboard | `ergo.services/application/observer` |
 | OTLP tracing | `ergo.services/application/pulse` |

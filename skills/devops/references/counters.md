@@ -62,14 +62,14 @@ Fanout check: `EventsRemoteSent / EventsPublished` tells you how many remote del
 | `LogMessages` | `[6]uint64` | Cumulative per level: `[0]=Trace [1]=Debug [2]=Info [3]=Warning [4]=Error [5]=Panic` |
 | `TracingSpans` | `[5]uint64` | `[0]=Send [1]=Request [2]=Response [3]=Spawn [4]=Terminate` |
 
-Watch `LogMessages[4]` (Error) and `LogMessages[5]` (Panic) — growth indicates real problems. Compare across nodes in a cluster; one node with significantly more errors is an outlier.
+Watch `LogMessages[4]` (Error) and `LogMessages[5]` (Panic) - growth indicates real problems. Compare across nodes in a cluster; one node with significantly more errors is an outlier.
 
 ### Runtime counters
 
 | Counter | Meaning |
 |---------|---------|
-| `MemoryUsed` | `runtime.MemStats.Alloc` — current live bytes |
-| `MemoryAlloc` | `runtime.MemStats.TotalAlloc` — cumulative bytes ever allocated |
+| `MemoryUsed` | `runtime.MemStats.Alloc` - current live bytes |
+| `MemoryAlloc` | `runtime.MemStats.TotalAlloc` - cumulative bytes ever allocated |
 | `UserTime` | User CPU time (ns) |
 | `SystemTime` | System CPU time (ns) |
 | `ServerTime` | Current wall-clock time with timezone |
@@ -97,7 +97,7 @@ Non-zero = cookie mismatches, version incompatibility, or scanning. Per-acceptor
 
 ## RemoteNodeInfo (from `network_node_info`, `network_nodes`)
 
-Per-connection view. **Always check both sides** (`network_node_info node=A name=B` and `network_node_info node=B name=A`) — divergence is silent data loss.
+Per-connection view. **Always check both sides** (`network_node_info node=A name=B` and `network_node_info node=B name=A`) - divergence is silent data loss.
 
 | Counter | Kind | Meaning |
 |---------|------|---------|
@@ -107,14 +107,62 @@ Per-connection view. **Always check both sides** (`network_node_info node=A name
 | `MessagesOut` | cumulative | Messages sent to this peer |
 | `BytesIn` / `BytesOut` | cumulative | Byte counters |
 | `TransitBytesIn` / `TransitBytesOut` | cumulative | Proxy-transit traffic if this connection is a proxy |
+| `Reconnections` | cumulative | Pool-item reconnections. Non-zero = at least one TCP link broke and was re-established; growing = ongoing flap. |
 
 Cross-check rules:
 - `A.MessagesOut` toward B should match `B.MessagesIn` from A. Significant divergence = data loss.
 - `ConnectionUptime << Uptime` = connection was re-established (flap); combine with registrar / network_info trend.
 
-Pool-related fields (instantaneous, not counters, useful for diagnostics):
-- `PoolSize` — number of TCP connections in the pool (determined by the **acceptor** during handshake)
-- `PoolDSN` — connection strings for each pooled connection; non-nil means this side dialed out
+### Fragmentation counters
+
+Messages above the peer's `MaxMessageSize` are split into fragments and reassembled on the far side.
+
+| Counter | Kind | Meaning |
+|---------|------|---------|
+| `FragmentsSent` | cumulative | Individual fragments sent |
+| `FragmentMessagesSent` | cumulative | Messages that were fragmented for sending |
+| `FragmentsReceived` | cumulative | Individual fragments received |
+| `FragmentMessagesRecv` | cumulative | Fragmented messages successfully reassembled |
+| `FragmentTimeouts` | cumulative | Reassemblies that timed out. **Non-zero is a fault** - a fragmented message never completed = dropped payload. |
+
+`FragmentTimeouts > 0` is a direct fault signal: pair it with an `A.MessagesOut` / `B.MessagesIn` divergence to confirm dropped messages.
+
+### Compression counters
+
+Compression applies only to cross-node messages above the process compression threshold (see `framework-internals.md` §Compression).
+
+| Counter | Kind | Meaning |
+|---------|------|---------|
+| `CompressedSent` | cumulative | Messages compressed on send |
+| `CompressedBytesSent` | cumulative | Bytes after compression (wire size) |
+| `CompressedOrigBytesSent` | cumulative | Bytes before compression (original size) |
+| `DecompressedRecv` | cumulative | Messages decompressed on receive |
+| `DecompressedBytesRecv` | cumulative | Bytes before decompression (wire size) |
+| `DecompressedOrigRecv` | cumulative | Bytes after decompression (original size) |
+
+Actual send-side compression ratio = `CompressedBytesSent / CompressedOrigBytesSent`. A ratio near 1.0 means compression is buying little - the threshold may be set too low for this traffic.
+
+### Tracing and clock counters
+
+| Counter | Kind | Meaning |
+|---------|------|---------|
+| `TracedSent` | cumulative | Messages sent carrying a tracing wrapper |
+| `TracedReceived` | cumulative | Messages received carrying a tracing wrapper |
+| `ClockSkew` | instant (ns) | Estimated clock offset relative to the peer. Positive = remote clock ahead; `0` = not yet measured. |
+
+`ClockSkew` complements `node_info.ServerTime` when correlating timestamped events across nodes - subtract it before comparing remote timestamps to local ones.
+
+### Pool fields
+
+Instantaneous, not counters, but essential for spotting a degraded connection pool:
+
+| Field | Kind | Meaning |
+|-------|------|---------|
+| `PoolSize` | config | Configured **target** number of TCP connections (set by the acceptor during handshake) |
+| `PoolLen` | instant | Current **live** number of TCP connections; reaches `PoolSize` once fully filled |
+| `PoolDSN` | instant | Connection strings (`host:port`) for each pooled connection; non-nil means this side dialed out |
+
+`PoolLen < PoolSize` means the pool has not fully filled - it is still filling or has been degraded by lost links. Cross-check with a growing `Reconnections` to confirm churn.
 
 ## ProcessInfo (from `process_info`)
 
@@ -139,7 +187,7 @@ Latency is the age of the oldest message in that queue. `-1` means `-tags=latenc
 | `MessagesOut` | cumulative | Messages the process sent |
 | `RunningTime` | cumulative (ns) | Time spent executing callbacks |
 | `InitTime` | one-shot (ns) | Duration of `ProcessInit()` |
-| `Wakeups` | cumulative | Sleep→Running transitions |
+| `Wakeups` | cumulative | Sleep->Running transitions |
 | `Uptime` | instant (sec) | Seconds since spawn |
 
 Derivations used in diagnostics:
@@ -159,16 +207,19 @@ See `process-model.md` for how to read these values.
 | `Producer` | instant | PID of the registering process |
 | `Subscribers` | instant | Current subscriber count (local + remote) |
 | `Notify` | flag | Producer requested `MessageEventStart/Stop` notifications |
+| `Open` | flag | Event accepts publishes from any local process (token check disabled) |
 | `BufferSize` | config | Configured ring buffer size (from `RegisterEvent`) |
 | `CurrentBuffer` | instant | Entries currently in the buffer |
 | `CreatedAt` | timestamp | Unix nanosecond of registration |
 | `MessagesPublished` | cumulative | Calls to `SendEvent` |
 | `MessagesLocalSent` | cumulative | Delivered to local subscribers |
 | `MessagesRemoteSent` | cumulative | Forwarded to remote subscribers |
+| `LastPublishedAt` | timestamp | Unix nanosecond of the most recent `SendEvent`; `0` if nothing was ever published |
 
 Cross-checks:
-- `MessagesPublished > 0` and `Subscribers == 0` and `Notify == false` → `utilization_state: no_subscribers` — publishing into the void.
-- `Subscribers > 0` and `MessagesPublished == 0` and `Notify == false` → `utilization_state: no_publishing` — subscribers starved.
+- `MessagesPublished > 0` and `Subscribers == 0` and `Notify == false` -> `utilization_state: no_subscribers` - publishing into the void.
+- `Subscribers > 0` and `MessagesPublished == 0` and `Notify == false` -> `utilization_state: no_publishing` - subscribers starved.
+- `MessagesPublished > 0` (it did publish once) with a **stale** `LastPublishedAt` -> a silent producer: it used to publish but has gone quiet. The two rules above only catch producers that *never* published (`MessagesPublished == 0`); `LastPublishedAt` is what catches one that *stopped*. Compare `LastPublishedAt` against `node_info.ServerTime` (or a peer's `ClockSkew`-adjusted clock) to gauge how long it has been silent.
 - See `tools.md` §`event_list` for the full state table.
 
 ## Patterns for Investigation
@@ -181,7 +232,7 @@ Compare both sides of a connection:
 A says MessagesOut=2363, B says MessagesIn=1
 ```
 
-B never received what A sent. Inspect `Reconnections` on both sides. Check `SendErrorsRemote` on A's `node_info`.
+B never received what A sent. Inspect `Reconnections` and `FragmentTimeouts` on both sides (a reconnect mid-transfer or a failed fragment reassembly both drop payload). Check `SendErrorsRemote` on A's `node_info`.
 
 ### Growing heap
 
@@ -197,4 +248,4 @@ Growing `ProcessesSpawned` without matching `ProcessesTerminated`, combined with
 
 ### Event waste
 
-`event_list utilization_state=no_subscribers sort_by=published` reveals events producing messages with nobody listening. Publishing cost is mostly wasted — producers should either gate on subscriber presence (`Notify: true`) or stop publishing.
+`event_list utilization_state=no_subscribers sort_by=published` reveals events producing messages with nobody listening. Publishing cost is mostly wasted - producers should either gate on subscriber presence (`Notify: true`) or stop publishing.

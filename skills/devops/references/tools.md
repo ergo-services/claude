@@ -5,9 +5,9 @@ Complete catalog of the 48 tools exposed by `ergo.services/application/mcp`. Gro
 | Parameter | Purpose |
 |-----------|---------|
 | `node` (string) | Forward the call to node `<name>` via native Ergo networking. The framework connects automatically; do not call `network_connect` just to query. |
-| `timeout` (int, seconds) | Per-call timeout for heavy remote operations. Raise for long `pprof_cpu` or large `pprof_goroutines debug=2`. Enforcement happens in the proxy forwarding layer; explicit value is optional. |
+| `timeout` (int, seconds) | Per-call timeout for heavy remote (`node=...`) operations. Raise for long `pprof_cpu` or large `pprof_goroutines debug=2`. Defaults to 30s when omitted or below 1. The tool schema advertises `max: 120`, but the forwarding layer does not clamp the value - larger timeouts are honored by the proxy call. The effective end-to-end ceiling is the HTTP request deadline (120s): once it elapses the MCP web handler returns HTTP 504 Gateway Timeout regardless of the `timeout` you pass. |
 
-These two are never listed in each tool's schema — they are resolved by the MCP proxy layer before dispatch.
+These two are never listed in each tool's schema - they are resolved by the MCP proxy layer before dispatch.
 
 ## Node (2)
 
@@ -39,7 +39,7 @@ Returns `ProcessShortInfo` for each matching process on the node. Supports filte
 | `min_init_time_ms` | number | 0 | `InitTime ≥ value` |
 | `min_wakeups` | int | 0 | `Wakeups ≥ value` |
 | `min_uptime` | int | 0 | Seconds |
-| `max_uptime` | int | 0 | Seconds — catch recently spawned |
+| `max_uptime` | int | 0 | Seconds - catch recently spawned |
 | `sort_by` | enum | | `mailbox, mailbox_latency, running_time, init_time, wakeups, uptime, messages_in, messages_out, drain` (descending) |
 
 ### `process_children`
@@ -61,7 +61,7 @@ Full `ProcessInfo` for one PID: mailbox queues, links, monitors, aliases, events
 Returns process state name: `init | sleep | running | wait response | terminated | zombee` (note the space in "wait response").
 
 ### `process_lookup`
-Resolve name↔PID. Provide one of:
+Resolve name<->PID. Provide one of:
 
 | Parameter | Meaning |
 |-----------|---------|
@@ -177,7 +177,7 @@ Disconnects from a named peer.
 | `name` | yes |
 
 ### `network_ping`
-Measures round-trip time through the full path (flusher → TCP → remote MCP → response). Requires the MCP application on the target node.
+Measures round-trip time through the full path (flusher -> TCP -> remote MCP -> response). Requires the MCP application on the target node.
 
 | Parameter | Required |
 |-----------|----------|
@@ -199,7 +199,7 @@ Periodically call any MCP tool, store results in a ring buffer. Use for trend an
 | `max_errors` | int | 0 | 0 = retry forever; useful for polling rare events |
 | `linger_sec` | int | 30 | Stay alive after completion so data can be read |
 
-Returns `sampler_id` — use with `sample_read`.
+Returns `sampler_id` - use with `sample_read`.
 
 ### `sample_listen` (passive)
 Passive sampler capturing log messages and/or published events.
@@ -214,7 +214,7 @@ Passive sampler capturing log messages and/or published events.
 | `buffer_size` | int | Default 256 |
 | `linger_sec` | int | Default 30 |
 
-Passive samplers also act as regular processes — you can `send_message`/`call_process` to them and the delivery is captured in the buffer (useful as a test receiver).
+Passive samplers also act as regular processes - you can `send_message`/`call_process` to them and the delivery is captured in the buffer (useful as a test receiver).
 
 ### `sample_read`
 Read sampler buffer entries.
@@ -235,11 +235,13 @@ Terminates the sampler. Remaining data can still be read until `linger_sec` expi
 Lists all active/lingering samplers on the node with their configuration and progress.
 No parameters.
 
-**Proxy samplers:** if `sample_start` / `sample_listen` was invoked with `node=X`, the sampler lives on node `X`. `sample_read` / `sample_list` / `sample_stop` MUST also include `node=X` — the sampler is only visible on the owning node.
+**Proxy samplers:** if `sample_start` / `sample_listen` was invoked with `node=X`, the sampler lives on node `X`. `sample_read` / `sample_list` / `sample_stop` MUST also include `node=X` - the sampler is only visible on the owning node.
 
 ## Typed Messages and Actions (6)
 
-Action tools (`send_message` with state change, `call_process`, `send_exit`, `process_kill`) **require explicit user permission**. Disabled entirely if the MCP app is started with `ReadOnly: true`.
+All six tools in this group are registered together. If the MCP app is started with `ReadOnly: true`, the whole group is **removed from the tool list** - including the read-only introspection tools `message_types` and `message_type_info`, so type introspection is unavailable in ReadOnly mode.
+
+When the group is enabled (`ReadOnly: false`), the four state-changing tools (`send_message`, `call_process`, `send_exit`, `process_kill`) **require explicit user permission** to run. `message_types` and `message_type_info` are read-only and do not.
 
 ### `message_types`
 Lists EDF-registered type names.
@@ -249,7 +251,7 @@ Lists EDF-registered type names.
 | `filter` | Substring match (case-insensitive) |
 
 ### `message_type_info`
-Structure of a registered type — fields, types, JSON tags. Short name (`TestOrder`) or full EDF name (`#myapp/pkg/TestOrder`) accepted.
+Structure of a registered type - fields, types, JSON tags. Short name (`TestOrder`) or full EDF name (`#myapp/pkg/TestOrder`) accepted.
 
 | Parameter | Required |
 |-----------|----------|
@@ -285,7 +287,7 @@ Delivers an exit signal. Target terminates unless it traps exits.
 | `reason` | string | no | `normal | shutdown | kill` or custom string; default `normal` |
 
 ### `process_kill`
-Forcefully kills a process (`gen.ErrKill`). Target goes to Zombee state immediately.
+Forcefully kills a process via `Node().Kill()`; the target transitions to Zombee state immediately. Use `send_exit` for graceful termination.
 
 | Parameter | Required |
 |-----------|----------|
@@ -411,7 +413,7 @@ Returns `[]Route` for reaching the named node.
 Returns `[]ProxyRoute` (hops via intermediate nodes).
 
 ### `registrar_resolve_app`
-Returns `[]ApplicationRoute` — which nodes run the named application, with tags/weight/mode/state.
+Returns `[]ApplicationRoute` - which nodes run the named application, with tags/weight/mode/state.
 
 ### `cluster_nodes`
 Combined list of self + connected + discovered nodes. Use first in any cluster-wide investigation.

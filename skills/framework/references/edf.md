@@ -20,8 +20,8 @@ Registration goes through `node.Network()`, which exposes the current registrati
 `RegisterTypes` resolves inter-type dependencies internally, so you may pass a `Person` that contains an `Address` field before or after `Address` in the same slice. Manual "nested types first" ordering is only relevant if you call `RegisterType` one type at a time.
 
 ```go
-func (a *MyApp) Load(node gen.Node, args ...any) (gen.ApplicationSpec, error) {
-    err := node.Network().RegisterTypes([]any{
+func (a *MyApp) Load(args ...any) (gen.ApplicationSpec, error) {
+    err := a.Node().Network().RegisterTypes([]any{
         Person{},   // contains an Address field
         Address{},  // order does not matter for the batch API
     })
@@ -37,7 +37,7 @@ func (a *MyApp) Load(node gen.Node, args ...any) (gen.ApplicationSpec, error) {
 The cleanest place to register an application's wire types is `ApplicationSpec.Network` (a `gen.ApplicationNetwork`). Entries there are processed during `ApplicationLoad`, before any process in the application is spawned, and are silently skipped when the node's network mode is `NetworkModeDisabled`.
 
 ```go
-func (a *MyApp) Load(node gen.Node, args ...any) (gen.ApplicationSpec, error) {
+func (a *MyApp) Load(args ...any) (gen.ApplicationSpec, error) {
     return gen.ApplicationSpec{
         Name: "orders",
         Network: gen.ApplicationNetwork{
@@ -144,7 +144,7 @@ var (
     ErrDuplicateOrder = errors.New("duplicate order")
 )
 
-func (a *MyApp) Load(node gen.Node, args ...any) (gen.ApplicationSpec, error) {
+func (a *MyApp) Load(args ...any) (gen.ApplicationSpec, error) {
     return gen.ApplicationSpec{
         Name: "orders",
         Network: gen.ApplicationNetwork{
@@ -167,9 +167,11 @@ err := gen.Errorf("processing order %d: %w", id, ErrInvalidOrder)
 
 `gen.Errorf` mirrors `fmt.Errorf` and stores the `%w` operands in a `*gen.Error` so `errors.Is` and `errors.Unwrap` keep working. The wrap chain survives a network hop - `errors.Is(err, ErrInvalidOrder)` still holds on the far node - but only when `NetworkFlags.EnableWrappedErrors` is on at **both** ends. It defaults to `true` (part of `gen.DefaultNetworkFlags`); if either side turns it off, the `*gen.Error` degrades to a flat `.Error()` string and the chain is lost.
 
-## Pre-Caching Atoms
+## Pre-Registering Atoms
 
-Registering an atom inserts it into the atom cache before first use, trimming handshake-time discovery cost for atoms known in advance (application names, process names, tag values). It is not required for correctness - atoms are auto-cached on first encounter - but makes startup cost predictable.
+`Network().RegisterAtom(name)` (and `RegisterAtoms`) add an atom to the atom cache that nodes exchange during the connection handshake. A registered atom then crosses the network as a compact 2-byte id instead of its full string, starting with the first message that carries it. Register the atoms you send often across nodes: application names, process names, tag values, recurring message discriminators.
+
+This is purely a wire-size optimization; correctness never depends on it. But there is no auto-caching - an unregistered atom is encoded in full every time it crosses a node, so registration is the only way to get the compact form. Register in `init()` (before the node starts), since a connection's atom cache is fixed at handshake time.
 
 ```go
 Network: gen.ApplicationNetwork{

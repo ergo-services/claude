@@ -4,8 +4,8 @@ Claude Code agents and skills for building and operating distributed actor-based
 
 Two complementary pairs:
 
-- **framework** — designing and implementing actor systems (build-time).
-- **devops** — diagnosing running clusters via the MCP application (runtime).
+- **framework** - designing and implementing actor systems (build-time).
+- **devops** - diagnosing running clusters via the MCP application (runtime).
 
 Each pair is split into an **agent** (behaviour / policy / decision logic) and a **skill** (compact reference data, API surface, playbooks). The agent is slim and decides *what to do*; the skill is loaded progressively and answers *what the code actually says*.
 
@@ -23,20 +23,24 @@ claude/
     ├── framework/
     │   ├── SKILL.md                       # navigation + critical rules
     │   └── references/
-    │       ├── actors.md                  # lifecycle, mailbox, Link/Monitor, Alias, Events
-    │       ├── supervision.md             # types, strategies, intensity, Significant, dynamic
-    │       ├── messages.md                # Send/Call, Important, FR-2PC, priority, compression
-    │       ├── application.md             # ApplicationSpec, Mode, Load(node, args), lifecycle
-    │       ├── pool.md                    # PoolOptions, capacity, scale
+    │       ├── actors.md                  # lifecycle, mailbox, Link/Monitor, Alias, Events, CoreEvent
+    │       ├── supervision.md             # types, strategies, intensity, per-child restart, dynamic
+    │       ├── messages.md                # Send/Call, important delivery, priority, compression
+    │       ├── application.md             # embed app.Application, Load(args), lifecycle, helper API
+    │       ├── pool.md                    # Pool, act.Router, act.WebWorker
     │       ├── meta.md                    # TCP/UDP/Web/Port, ProcessPool routing
-    │       ├── node.md                    # NodeOptions, NetworkFlags, Security, EnableSpawn
-    │       ├── edf.md                     # RegisterTypeOf, visibility matrix, limits
-    │       ├── cluster.md                 # etcd/Saturn, Resolver, Tags, proxy
-    │       ├── testing.md                 # unit harness: Spawn, Should*, matchers, injection
+    │       ├── node.md                    # NodeOptions, NetworkFlags, Security, CertManager/TLS
+    │       ├── edf.md                     # Network().RegisterType, schema evolution, visibility
+    │       ├── cluster.md                 # etcd/Saturn, Registrar, ResolveApplication, proxy
+    │       ├── tracing.md                 # samplers, business spans, exporters, TracingFlags
+    │       ├── cron.md                    # gen.Cron, CronJob, cron actions, MessageCron
+    │       ├── logging.md                 # gen.Log, LogLevel, structured fields, LoggerBehavior
+    │       ├── errors.md                  # gen sentinels, TerminateReason*, errors.Is
+    │       ├── testing.md                 # unit/stage/check/mock: Spawn, Should*, injection
     │       ├── actor-lib.md               # actor/health, leader, metrics
     │       ├── applications-lib.md        # application/mcp, observer, pulse, radar
     │       ├── meta-lib.md                # meta/websocket, meta/sse
-    │       ├── integrations.md            # registrar/etcd, saturn, logger/colored, rotate
+    │       ├── integrations.md            # registrar/etcd, saturn, logger/colored, rotate, sentry
     │       └── erlang-protocol.md         # proto/erlang23 (EPMD, ETF, DIST)
     └── devops/
         ├── SKILL.md                       # navigation + critical rules
@@ -54,13 +58,13 @@ claude/
 
 **Agents** (~6 KB each) carry only behavioural rules: trigger cues, diagnostic approach, decision tables, anti-patterns, permission rules. They contain no API signatures.
 
-**Skills** use progressive disclosure — the top-level `SKILL.md` is a small (~3 KB) index with a navigation table plus the five non-negotiable rules. Concrete API details, tool schemas, formulas, and playbooks live in `references/*.md`, each ~150–500 lines and loaded on demand.
+**Skills** use progressive disclosure - the top-level `SKILL.md` is a small (~3 KB) index with a navigation table plus the five non-negotiable rules. Concrete API details, tool schemas, formulas, and playbooks live in `references/*.md`, each ~150-500 lines and loaded on demand.
 
 A typical task loads:
-1. `SKILL.md` (auto) — ~3 KB.
-2. One or two relevant `references/*.md` — ~5–10 KB.
+1. `SKILL.md` (auto) - ~3 KB.
+2. One or two relevant `references/*.md` - ~5-10 KB.
 
-Total working-set ≈ 8–13 KB vs ~17 KB monolithic; detail per topic is higher rather than lower.
+Total working-set ≈ 8-13 KB vs ~17 KB monolithic; detail per topic is higher rather than lower.
 
 ## Pair Comparison
 
@@ -73,16 +77,20 @@ Total working-set ≈ 8–13 KB vs ~17 KB monolithic; detail per topic is higher
 
 ## Installation
 
-### Recommended: Install as a Claude Code plugin
+### Easiest: from the Claude Code plugin marketplace
 
-One-shot install from the official repo, updates handled by Claude Code:
+The plugin is already published in the Claude Code marketplace. In Claude Code, open the plugins section (run `/plugin`), search for `ergo`, and install it - no manual setup required.
+
+### From the source repo
+
+Add this repository as a marketplace and install; updates are handled by Claude Code:
 
 ```bash
 /plugin marketplace add ergo-services/claude
 /plugin install ergo@ergo-services
 ```
 
-After install, agents and skills are namespaced under the plugin — invoke skills as `/ergo:framework` / `/ergo:devops`; agents pick themselves up from trigger phrases.
+After install, agents and skills are namespaced under the plugin - invoke skills as `/ergo:framework` / `/ergo:devops`; agents pick themselves up from trigger phrases.
 
 Update later with `/plugin update`, remove with `/plugin uninstall ergo@ergo-services`.
 
@@ -101,7 +109,7 @@ mkdir -p ~/.claude/agents ~/.claude/skills
 ln -sf $(pwd)/agents/framework-architect.md ~/.claude/agents/
 ln -sf $(pwd)/agents/devops.md              ~/.claude/agents/
 
-# Skills (directories — references/ is picked up transitively)
+# Skills (directories - references/ is picked up transitively)
 ln -sf $(pwd)/skills/framework ~/.claude/skills/
 ln -sf $(pwd)/skills/devops    ~/.claude/skills/
 ```
@@ -125,7 +133,7 @@ Designs Ergo Framework applications with DDD bounded contexts, supervision trees
 - "create ergo design document"
 - "actor system design"
 
-**Output** — a design document with bounded context, cluster topology, supervision tree, data structures, message flow, load analysis, and implementation phases.
+**Output** - a design document with bounded context, cluster topology, supervision tree, data structures, message flow, load analysis, and implementation phases.
 
 ### devops (Agent)
 
@@ -149,7 +157,7 @@ Connects to running Ergo nodes via the MCP application and runs hypothesis-drive
 - Active and passive samplers for trend analysis and transient captures.
 - Cluster-wide queries via the MCP proxy layer.
 
-**Requires** — `ergo.services/application/mcp` running on each node under inspection.
+**Requires** - `ergo.services/application/mcp` running on each node under inspection.
 
 ### framework (Skill)
 
@@ -157,7 +165,7 @@ Reference for implementing Ergo Framework applications. Load via `/ergo:framewor
 
 ### devops (Skill)
 
-Reference for diagnosing live Ergo nodes. Load via `/ergo:devops`. Navigation table lists 7 topic files — tool catalog, process model, counters, framework internals, playbooks, samplers, build tags.
+Reference for diagnosing live Ergo nodes. Load via `/ergo:devops`. Navigation table lists 7 topic files - tool catalog, process model, counters, framework internals, playbooks, samplers, build tags.
 
 ## MCP Application Setup
 
@@ -186,7 +194,7 @@ claude mcp add --transport http ergo http://localhost:9922/mcp \
     --header "Authorization: Bearer ${MCP_TOKEN}"
 ```
 
-Every MCP tool accepts a `node` proxy parameter — pass `node=<name>` and the request is forwarded through native Ergo networking. The entry-point node is not privileged; always name the target explicitly.
+Every MCP tool accepts a `node` proxy parameter - pass `node=<name>` and the request is forwarded through native Ergo networking. The entry-point node is not privileged; always name the target explicitly.
 
 ## Build Tags for Better Diagnostics
 
@@ -196,6 +204,7 @@ Every MCP tool accepts a `node` proxy parameter — pass `node=<name>` and the r
 | `-tags=latency` | Enables `MailboxLatency` measurement (required for liveness score) |
 | `-tags=verbose` | Verbose framework-internal logging |
 | `-tags=norecover` | **Disables** panic recovery (debug only) |
+| `-tags=typestats` | Per-type EDF encode/decode counters (`gen.RegisteredTypeStats`) |
 
 See `skills/devops/references/build-tags.md` for detail.
 

@@ -4,6 +4,35 @@ All notable changes to this plugin are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this plugin
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-07-01
+
+Skills actualized against Ergo Framework v3.3.x source. Every reference was
+audited against the code: stale claims corrected, missing capabilities added,
+thin sections deepened.
+
+### Added
+
+- **`framework` skill** - four new references: `tracing` (samplers, business
+  spans, exporters, flags), `cron` (jobs, actions, `MessageCron`), `logging`
+  (`gen.Log`, levels, custom `LoggerBehavior`), and `errors` (sentinels,
+  `TerminateReason*`, `errors.Is` matching). The skill now carries 19 topic
+  references.
+- Helper-API pattern in `application`: package-level functions that address the
+  local instance by name and keep message types private.
+
+### Changed
+
+- Rewrote `testing` to the real API across the four layers (`unit`, `stage`,
+  `check`, `mock`).
+- Corrected `application` (embed `app.Application`, `Load(args)` lifecycle),
+  `node` (`NetworkFlags` defaults, error-returning introspection), `cluster`
+  (`etcd.Create`, `Registrar` interface, `ResolveApplication` filters), `edf`
+  (`Network().RegisterType`, schema evolution), `actor-lib` (metrics),
+  `supervision` (per-child restart), `pool` (`act.Router`, `act.WebWorker`),
+  `meta` (Call receiver), and the devops references.
+- Added `logger/sentry` to `integrations`, the `typestats` build tag to
+  `build-tags`, and refreshed both `SKILL.md` dispatchers and the `README`.
+
 ## [1.0.0] - 2026-04-17
 
 Initial release of the Ergo Services Claude Code plugin — agents and skills

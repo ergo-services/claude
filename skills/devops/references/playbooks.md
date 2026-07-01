@@ -1,6 +1,6 @@
 # Diagnostic Playbooks
 
-Ten playbooks covering the most common Ergo cluster symptoms. Each follows the observe → hypothesize → test → confirm → recommend pattern. Commands use real MCP tool names and parameters from `tools.md`; counter meanings are in `counters.md`; underlying semantics in `framework-internals.md`.
+Ten playbooks covering the most common Ergo cluster symptoms. Each follows the observe -> hypothesize -> test -> confirm -> recommend pattern. Commands use real MCP tool names and parameters from `tools.md`; counter meanings are in `counters.md`; underlying semantics in `framework-internals.md`.
 
 When a playbook says "all nodes", fire the queries in parallel (one tool call per node in a single batch), never sequentially.
 
@@ -9,7 +9,7 @@ When a playbook says "all nodes", fire the queries in parallel (one tool call pe
 **Symptoms:** "something feels off", periodic health checks, pre-deploy verification.
 
 **Observe**
-1. `cluster_nodes` — discover all nodes (self + connected + discovered).
+1. `cluster_nodes` - discover all nodes (self + connected + discovered).
 2. Parallel for every node:
    - `node_info node=<N>`
    - `network_ping name=<N>` (from the MCP entry-point)
@@ -22,13 +22,13 @@ Node | Uptime | Processes | Zombee | Heap | SendErrorsLocal | Panics | RTT | App
 ```
 
 **Flag anomalies**
-- Uptime outlier — one node restarted.
-- `ProcessesZombee > 0` — kill cascade or force-termination.
-- Heap outlier — memory growth or leak.
-- `SendErrorsLocal` or `LogMessages[4]` (Error) / `[5]` (Panic) growing — active incident.
-- High ping RTT (>1s) — overloaded or network issues.
-- `ApplicationsRunning < ApplicationsTotal` — something loaded but not running.
-- Missing expected app in `app_list` — deployment gap.
+- Uptime outlier - one node restarted.
+- `ProcessesZombee > 0` - kill cascade or force-termination.
+- Heap outlier - memory growth or leak.
+- `SendErrorsLocal` or `LogMessages[4]` (Error) / `[5]` (Panic) growing - active incident.
+- High ping RTT (>1s) - overloaded or network issues.
+- `ApplicationsRunning < ApplicationsTotal` - something loaded but not running.
+- Missing expected app in `app_list` - deployment gap.
 
 **Confirm** by zooming into the outlier node's counters and samplers.
 
@@ -49,20 +49,20 @@ process_list node=<N> sort_by=mailbox limit=10
 | High | `≈ 1` | Slow callback | `pprof_cpu filter=<behavior>` to find hotspot |
 | Low | High | Transient burst, handling OK | Monitor with sampler; no action |
 
-**Test — CPU hotspot**
+**Test - CPU hotspot**
 ```
 pprof_cpu node=<N> duration=5 exclude="runtime" limit=15 timeout=30
 pprof_cpu node=<N> duration=5 filter="<app-package>" limit=10
 ```
 
-**Test — liveness**
+**Test - liveness**
 ```
 process_list node=<N> min_mailbox=1 min_uptime=60 min_messages_in=1 sort_by=mailbox_latency limit=10
 ```
 
 For each candidate compute `Liveness = RunningTime_ns / (Uptime_sec * MailboxLatency_ns)`:
-- `> 0.01` — overloaded but alive → scale out, add Pool, or shed load.
-- `< 0.001` — callback blocked → next step below.
+- `> 0.01` - overloaded but alive -> scale out, add Pool, or shed load.
+- `< 0.001` - callback blocked -> next step below.
 
 **Confirm blocked callback**
 ```
@@ -93,7 +93,7 @@ sample_start node=<N> tool=pprof_goroutines arguments={"debug":1,"filter":"Proce
 sample_read sampler_id=<id> node=<N>
 ```
 
-This is not a true CPU profile, but an actor-goroutine presence map — useful when CPU time is spread across many short callbacks.
+This is not a true CPU profile, but an actor-goroutine presence map - useful when CPU time is spread across many short callbacks.
 
 ## 4. Memory Growth
 
@@ -111,13 +111,15 @@ pprof_heap node=<N> limit=20 filter="<app-pkg>"  # only application allocators
 sample_start node=<N> tool=runtime_stats interval_ms=5000 duration_sec=300 linger_sec=60
 ```
 
-After collection: `sample_read sampler_id=<id> node=<N>` — plot `heap_alloc` and `heap_objects` over time.
+After collection: `sample_read sampler_id=<id> node=<N>` - plot `heap_alloc` and `heap_objects` over time.
 
-**Interpret**
-- `MemoryUsed` growing without recovery after GC → live leak.
-- `MemoryAlloc - MemoryUsed` growing faster than `MemoryUsed` → high churn / GC pressure.
-- Top allocator in `pprof_heap` from application code → leak suspect.
-- Deep mailboxes (`process_list sort_by=mailbox`) — messages holding memory waiting to be processed.
+**Interpret** (all fields below come from `runtime_stats`)
+- `heap_alloc` not shrinking after `num_gc` increments -> live leak (GC ran but could not reclaim).
+- `total_alloc` rising much faster than `heap_alloc` -> high churn / GC pressure (lots allocated then freed).
+- Top allocator in `pprof_heap` from application code -> leak suspect.
+- Deep mailboxes (`process_list sort_by=mailbox`) - messages holding memory waiting to be processed.
+
+`node_info` reports the same live/cumulative pair under different names - `MemoryUsed` = runtime `Alloc` (tracks `heap_alloc`), `MemoryAlloc` = cumulative `TotalAlloc` (equals `total_alloc`). Use whichever tool you already have open; the interpretation is identical.
 
 **Recommend**
 - Identify the allocator callsite, add pooling or bound the allocation.
@@ -179,14 +181,19 @@ process_inspect node=<N> pid=<supervisor-pid>
 
 Look in the inspect output for `restarts_count`, `strategy`, `intensity`, `period`. A supervisor at or near its intensity limit is a prime suspect.
 
-**Increase logging if needed (requires user permission — it's an action tool)**
+**Increase logging if needed**
+
+`log_level_set` mutates the node, so the MCP client will prompt before running it. It is not one of the ReadOnly-gated action tools, so it stays callable even on a ReadOnly node.
+
+It targets a single process, not a behavior family. Resolution order is `node` -> PID string -> meta alias -> registered process name; a behavior type is not a valid target. Raise logging per PID:
 ```
-log_level_set node=<N> target=<behavior-or-pid> level=debug
+log_level_set node=<N> target=<pid-or-registered-name> level=debug
 ```
+To cover a whole behavior family, iterate the PIDs found earlier via `process_list behavior=<type>` and call `log_level_set` once per PID.
 
 **Recommend**
 - Fix the root-cause panic/error (not the symptom).
-- If restart intensity is too aggressive, loosen it — but only after fixing the underlying bug.
+- If restart intensity is too aggressive, loosen it - but only after fixing the underlying bug.
 - If the child exits normally (expected) but the parent uses `Permanent` strategy, switch to `Transient`.
 
 ## 7. Zombie Processes
@@ -211,9 +218,9 @@ pprof_goroutines node=<N> debug=2 filter="<behavior>" limit=5 timeout=60
 ```
 
 Typical patterns:
-- Goroutine in `select (no cases)` — leaked channel receive.
-- Goroutine in `runtime_pollWait` — blocking syscall in a callback.
-- Goroutine in `sync.(*Mutex).Lock` — lock contention.
+- Goroutine in `select (no cases)` - leaked channel receive.
+- Goroutine in `runtime_pollWait` - blocking syscall in a callback.
+- Goroutine in `sync.(*Mutex).Lock` - lock contention.
 
 All three are violations of the actor model.
 
@@ -232,7 +239,7 @@ network_ping name=<suspect>
 
 Fail or RTT > 1s = problem. RTT measures the full path (flusher, TCP, remote MCP pool, response).
 
-**Both-sided investigation — always compare**
+**Both-sided investigation - always compare**
 ```
 network_node_info node=A name=B    # A's view of B
 network_node_info node=B name=A    # B's view of A
@@ -258,7 +265,7 @@ registrar_resolve node=<N> name=<target>           # can we discover the target 
 ```
 
 **Recommend**
-- Silent data loss: restart the connection (requires permission — `network_disconnect` + reconnect).
+- Silent data loss: restart the connection with `network_disconnect` then reconnect. `network_disconnect` mutates node state so the MCP client prompts before running it; like `log_level_set` it is not one of the ReadOnly-gated action tools and stays callable on a ReadOnly node.
 - Cookie mismatches: verify env vars, check `HandshakeErrors` after deploy.
 - Chronic instability: check MTU, keep-alive settings, L4 load balancer idle timeouts.
 
@@ -312,7 +319,7 @@ Shows actor goroutines only. Header tells total / matched / showing.
 pprof_goroutines node=<N> debug=2 filter="<behavior-type>" limit=5
 ```
 
-`debug=2` includes full stacks — use for deep inspection of a few goroutines.
+`debug=2` includes full stacks - use for deep inspection of a few goroutines.
 
 **Stuck in sync Call**
 ```
@@ -328,7 +335,7 @@ pprof_goroutines node=<N> debug=1 exclude="runtime_pollWait" limit=30
 
 Surfaces non-network-IO goroutines.
 
-**Large cluster — raise timeout**
+**Large cluster - raise timeout**
 ```
 pprof_goroutines node=<N> debug=1 filter="..." limit=20 timeout=60
 ```
@@ -338,7 +345,7 @@ pprof_goroutines node=<N> debug=1 filter="..." limit=20 timeout=60
 pprof_goroutines node=<N> pid=<PID>
 ```
 
-If the process is in `sleep` state, its goroutine is parked — dump may be empty. Poll on wake:
+If the process is in `sleep` state, its goroutine is parked - dump may be empty. Poll on wake:
 ```
 sample_start node=<N> tool=pprof_goroutines arguments={"pid":"<PID>"} interval_ms=300 count=1 max_errors=0
 ```
@@ -349,5 +356,5 @@ sample_start node=<N> tool=pprof_goroutines arguments={"pid":"<PID>"} interval_m
 - Counter semantics: `counters.md`.
 - Process-state / mailbox / liveness interpretation: `process-model.md`.
 - Runtime internals (Important Delivery, restart intensity, pool backpressure, connection pool, event fanout): `framework-internals.md`.
-- Samplers — active/passive, linger, proxy: `samplers.md`.
+- Samplers - active/passive, linger, proxy: `samplers.md`.
 - Build tag requirements (`-tags=pprof`, `-tags=latency`): `build-tags.md`.

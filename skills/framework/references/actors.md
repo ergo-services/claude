@@ -46,11 +46,13 @@ Messages are dispatched in priority order:
 | `MessagePriorityMax` | 2 | Urgent | System control, kill signals |
 | `MessagePriorityHigh` | 1 | System | Framework-internal messages |
 | `MessagePriorityNormal` | 0 | Main | Application messages (default) |
-| — | — | Log | Log messages |
+| - | - | Log | Log messages |
 
 ## Trap Exit
 
-By default, a linked process dying delivers an exit signal that terminates this actor. With `SetTrapExit(true)`, the signal becomes a `gen.MessageExitPID` message in the mailbox.
+By default, an exit signal from a linked target terminates this actor. With `SetTrapExit(true)`, exit signals from **other** processes are converted into `gen.MessageExit*` messages delivered to the mailbox, so the actor can inspect the reason and decide how to react.
+
+One exception: an exit signal from the **parent** process is never trapped. The actor always terminates when its parent exits, regardless of `SetTrapExit` and regardless of the reason (the reason is not consulted). Only exit signals from non-parent targets are converted into mailbox messages.
 
 ```go
 func (a *Supervisor) Init(args ...any) error {
@@ -80,23 +82,44 @@ pid, err := a.SpawnRegister("worker-1", createWorker, gen.ProcessOptions{})
 alias, err := a.SpawnMeta(metaBehavior, gen.MetaOptions{})
 ```
 
+### ProcessOptions
+
+Configure the new process at spawn time. All fields are optional.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `MailboxSize` | `int64` | Max queued messages. `0` (default) = unlimited. When full, senders get `gen.ErrProcessMailboxFull` unless a `Fallback` is set |
+| `LinkParent` | `bool` | Link the child to its parent: if the **parent** terminates, the child receives an exit signal and terminates. Ignored when spawned by the node (no parent process) |
+| `LinkChild` | `bool` | Link the parent to the child: if the **child** terminates, the parent receives an exit signal and terminates. Ignored when spawned by the node |
+| `LogLevel` | `gen.LogLevel` | Initial log level for the process. Default `gen.LogLevelInfo`; change later via `Log().SetLevel(...)` |
+| `InitTimeout` | `int` | Max seconds for `Init()` to complete. `0` uses the default 5s; exceeding it terminates the process with `gen.ErrTimeout`. Remote spawn and application processes allow up to 15s |
+| `PreserveMailbox` | `bool` | On abnormal termination (panic, abnormal return, kill), capture the mailbox so a supervisor can hand it to the restarted incarnation. Normal and shutdown exits never capture |
+| `Env` | `map[gen.Env]any` | Process-specific environment, readable via `Env()`. Overrides parent, leader, and node values |
+| `Leader` | `gen.PID` | Group leader PID. Defaults to inherited from parent |
+| `Fallback` | `gen.ProcessFallback` | Where overflow goes when `MailboxSize` is full. See `messages.md` |
+| `SendPriority` | `gen.MessagePriority` | Default priority for this process's `Send`. See `messages.md` |
+| `ImportantDelivery` | `bool` | Confirmed cross-node delivery for every message. See `messages.md` |
+| `Compression` | `gen.Compression` | Per-process outgoing compression. See `messages.md` |
+
+`LinkParent` and `LinkChild` are two independent one-directional links - set both for the bidirectional Erlang-style coupling. The mailbox and delivery knobs (`MailboxSize`, `Fallback`, `SendPriority`, `ImportantDelivery`, `Compression`) are covered in `messages.md`.
+
 ### Remote Spawn
 
-Spawning on another node is not automatic — the **target node** must explicitly allow it (security default-deny):
+Spawning on another node is not automatic - the **target node** must explicitly allow it (security default-deny):
 
 1. Enable the network flag: `NetworkFlags.EnableRemoteSpawn = true` in the target node's `NetworkOptions`.
-2. Register the factory on the target node: `node.Network().EnableSpawn(name, factory, allowedNodes...)`. The `name` is the permission token callers use. `allowedNodes` is an ACL — empty means any node.
+2. Register the factory on the target node: `node.Network().EnableSpawn(name, factory, allowedNodes...)`. The `name` is the permission token callers use. `allowedNodes` is an ACL - empty means any node.
 
 Only then callers can use `RemoteSpawn`:
 
 ```go
-// From inside a process — inherits application, log level, env from caller
+// From inside a process - inherits application, log level, env from caller
 pid, err := a.RemoteSpawn("other@host", "worker", gen.ProcessOptions{}, arg1, arg2)
 
 // With registration on the remote node
 pid, err := a.RemoteSpawnRegister("other@host", "worker", "worker-001", gen.ProcessOptions{})
 
-// Node-level alternative — no application inheritance
+// Node-level alternative - no application inheritance
 remote, err := node.Network().GetNode("other@host")
 pid, err := remote.Spawn("worker", gen.ProcessOptions{}, arg1, arg2)
 pid, err := remote.SpawnRegister("worker-001", "worker", gen.ProcessOptions{})
@@ -106,8 +129,11 @@ See `references/node.md` for `EnableSpawn` / `DisableSpawn` API.
 
 ## Links and Monitors
 
-**Link** — bidirectional; both processes die together (unless either traps exit).
-**Monitor** — unidirectional; sender receives `MessageDownPID` on target termination.
+Both mechanisms notify you when a target terminates. They differ in the consequence and in direction.
+
+**Link** - a single **directed** relation, not symmetric like Erlang. `a.Link(target)` means: when `target` terminates, this process receives an exit signal (and terminates too, unless it traps exit). The reverse is not true - if this process terminates, `target` is unaffected. For bidirectional coupling, both sides link to each other, or use the `LinkParent` / `LinkChild` spawn options (each is one direction).
+
+**Monitor** - a directed observation with no lifecycle coupling: this process receives a `gen.MessageDown*` message on target termination and keeps running.
 
 ```go
 err := a.Link(targetPID)      // or target ProcessID, Alias, Event, node Atom
@@ -117,7 +143,7 @@ err := a.Monitor(targetPID)
 err := a.Demonitor(targetPID)
 ```
 
-Notifications arriving in `HandleMessage`:
+Notifications arriving in `HandleMessage`. `MessageDown*` (monitors) are always delivered; `MessageExit*` (links) are delivered only when the process has `SetTrapExit(true)` - otherwise the exit signal terminates the process silently.
 
 | Message Type | When |
 |--------------|------|
@@ -126,8 +152,11 @@ Notifications arriving in `HandleMessage`:
 | `gen.MessageDownAlias{Alias, Reason}` | Monitored alias released |
 | `gen.MessageDownEvent{Event, Reason}` | Monitored event unregistered |
 | `gen.MessageDownNode{Name}` | Monitored node disconnected |
-| `gen.MessageExitPID{PID, Reason}` | Linked process died (with `SetTrapExit(true)`) |
-| `gen.MessageExitNode{Name}` | Linked node disconnected |
+| `gen.MessageExitPID{PID, Reason}` | Linked process died (trap exit) |
+| `gen.MessageExitProcessID{ProcessID, Reason}` | Linked named process died (trap exit) |
+| `gen.MessageExitAlias{Alias, Reason}` | Linked alias released (trap exit) |
+| `gen.MessageExitEvent{Event, Reason}` | Linked event unregistered (trap exit) |
+| `gen.MessageExitNode{Name}` | Linked node disconnected (trap exit) |
 
 ## Aliases
 
@@ -135,7 +164,7 @@ An alias is an additional temporary identifier for a process. A process has at m
 
 Typical uses:
 - Exposing multiple logical endpoints of one actor (e.g., separate aliases for "admin" and "client" facing channels), then dispatching via `HandleMessageAlias` / `HandleCallAlias` with `SetSplitHandle(true)`.
-- Handing out a revocable address — delete the alias to cut off further communication without terminating the process.
+- Handing out a revocable address - delete the alias to cut off further communication without terminating the process.
 - Meta processes (TCP connections, WebSocket sessions, etc.): each meta process's identifier is a `gen.Alias`, not a PID. See `meta.md`.
 
 ```go
@@ -148,19 +177,22 @@ a.Send("collaborator", RegisterEndpoint{Addr: alias})
 aliases := a.Aliases()  // all live aliases for this process
 ```
 
-Request/reply does not require aliases. Use `Call` / `HandleCall` — the framework generates a `gen.Ref` to correlate request and response automatically; the handler receives it as the `ref` parameter of `HandleCall(from, ref, request)` and can pass it to `SendResponse(from, ref, msg)` for deferred replies. See `messages.md`.
+Request/reply does not require aliases. Use `Call` / `HandleCall` - the framework generates a `gen.Ref` to correlate request and response automatically; the handler receives it as the `ref` parameter of `HandleCall(from, ref, request)`. Two return conventions matter: returning `(nil, nil)` defers the reply so the handler can later call `SendResponse(from, ref, msg)` (for example once an async event arrives), and returning `(result, gen.TerminateReasonNormal)` with a non-nil `result` sends the response and then terminates the actor normally. See `messages.md`.
 
 ## Events (Pub/Sub)
 
-Events are named pub/sub channels identified by `{Name, Node}`. The name must be unique per node — the same name can exist on different nodes as independent events.
+Events are named pub/sub channels identified by `{Name, Node}`. The name must be unique per node - the same name can exist on different nodes as independent events.
 
 ### Ownership vs Publishing
 
-`RegisterEvent` makes the caller the **owner** and returns a `gen.Ref` token. The owner controls the event's lifecycle (unregister, notifications). Publishing requires the token, not ownership — the owner can hand the token to other processes and any token-holder may publish via `SendEvent(name, token, msg)`. Publishing with a wrong or unknown token fails.
+`RegisterEvent` makes the caller the **owner** and returns a `gen.Ref` token. The owner controls the event's lifecycle (unregister, notifications). By default publishing requires the token, not ownership - the owner can hand the token to other processes and any token-holder may publish via `SendEvent(name, token, msg)`. When the token check is on, publishing with a wrong or unknown token fails.
+
+Setting `EventOptions.Open = true` disables the token check on `SendEvent`: any local process may then publish to the event by name regardless of the token value. The token is still returned but is no longer required to publish. `UnregisterEvent` is unaffected - only the registering process (or the node, for node-level events) can unregister. Use `Open` for a shared internal bus where the token ceremony protects nothing.
 
 This separation enables useful patterns:
 - Coordinator registers, worker pool publishes (multiple producers on one logical stream).
-- Primary/backup rotation — backup holds the token and takes over publishing without re-registering.
+- Primary/backup rotation - backup holds the token and takes over publishing without re-registering.
+- Open node-wide bus - many unrelated producers publish by name without distributing a token.
 
 ### Registering and Publishing
 
@@ -169,6 +201,7 @@ This separation enables useful patterns:
 token, err := a.RegisterEvent("price_update", gen.EventOptions{
     Notify: true,   // owner receives MessageEventStart/Stop on first/last subscriber
     Buffer: 10,     // keep last N events; late subscribers receive them on join
+    Open:   false,  // true = any local process may publish by name (no token check)
 })
 defer a.UnregisterEvent("price_update")
 
@@ -192,10 +225,10 @@ Use these to start/stop expensive data production on demand.
 Subscribers use `LinkEvent` or `MonitorEvent`. Both return buffered events on successful subscription.
 
 ```go
-// Link — subscriber terminates if event owner terminates (unless trap exit)
+// Link - subscriber terminates if event owner terminates (unless trap exit)
 lastEvents, err := a.LinkEvent(gen.Event{Name: "price_update", Node: "feed@host"})
 
-// Monitor — subscriber receives MessageDownEvent on owner termination, no cascade
+// Monitor - subscriber receives MessageDownEvent on owner termination, no cascade
 lastEvents, err := a.MonitorEvent(gen.Event{Name: "price_update", Node: "feed@host"})
 
 for _, e := range lastEvents {
@@ -203,7 +236,7 @@ for _, e := range lastEvents {
 }
 ```
 
-For a local event, omit `Node` — the framework fills in the local node name.
+For a local event, omit `Node` - the framework fills in the local node name.
 
 ### Delivery
 
@@ -230,6 +263,49 @@ If a subscriber's node loses connection, that subscriber receives a termination 
 ### Network Scaling
 
 Event distribution scales with **subscribing nodes**, not subscribers. Publishing to 1M subscribers spread across 10 nodes sends 10 network messages; the remote nodes fan out to local subscribers.
+
+### Built-in CoreEvent Bus
+
+Every node auto-registers one event for you at startup, named `gen.CoreEvent` (the atom `"core"`), owned by the node core. You never register or publish to it. It is always available - no registrar and no networking required - and buffered (last 1000 events). The node publishes the facts of its own lifecycle here so any process can react without polling.
+
+Subscribe the same way you subscribe to any event, then type-switch on `m.Message` in `HandleEvent`:
+
+```go
+func (a *Watcher) Init(args ...any) error {
+    // omit Node for the local bus; name a peer to watch its lifecycle remotely
+    _, err := a.MonitorEvent(gen.Event{Name: gen.CoreEvent})
+    return err
+}
+
+func (a *Watcher) HandleEvent(m gen.MessageEvent) error {
+    switch e := m.Message.(type) {
+    case gen.MessageCoreApplicationStarted:
+        a.Log().Info("app %s started (%s)", e.Name, e.Mode)
+    case gen.MessageCoreApplicationStopped:
+        a.Log().Warning("app %s stopped: %v", e.Name, e.Reason)
+    case gen.MessageCoreNodeConnected:
+        a.Log().Info("node %s connected", e.Name)
+    case gen.MessageCoreNodeDisconnected:
+        a.Log().Warning("node %s disconnected: %v", e.Name, e.Reason)
+    }
+    return nil
+}
+```
+
+The four message types carried on this bus:
+
+| Message Type | Published when |
+|--------------|----------------|
+| `gen.MessageCoreApplicationStarted{Name, Mode}` | An application on this node reached the running state |
+| `gen.MessageCoreApplicationStopped{Name, Mode, Reason}` | A running application on this node stopped. `Reason` carries the termination that stopped it (for a permanent application, the reason of the member whose termination stopped it) |
+| `gen.MessageCoreNodeConnected{Name}` | A connection with a remote node was established |
+| `gen.MessageCoreNodeDisconnected{Name, Reason}` | A connection with a remote node was lost |
+
+Because the bus is buffered (1000 entries), subscribing from `Init()` returns the most recent transitions in the `LinkEvent` / `MonitorEvent` result slice. A process can therefore learn which applications are already running and which peers are already connected without racing the producer, and a restarted observer does not start blind.
+
+Naming a peer node (`gen.Event{Name: gen.CoreEvent, Node: "worker1@host"}`) lets one observer watch the lifecycle of every node in the cluster from one place. This is the supported way for an actor to react to peers connecting or disconnecting (see `cluster.md`); it complements the disconnect-only `MonitorNode` / `LinkNode` by also delivering the connect notification and covering any peer without a per-node monitor. If a watched node becomes unreachable, the monitor fires with reason `gen.ErrNoConnection`.
+
+The bus reports one node only: its own applications and its own peers. Cluster-wide facts (a node joining or leaving the cluster, application availability across the cluster) are reported separately by the registrar - see `cluster.md`.
 
 ## Registration
 
@@ -294,7 +370,7 @@ func (a *Counter) Terminate(reason error) {
 
 ## Anti-Patterns
 
-- **Never** use mutex, channel receive/send, `time.Sleep`, or spawned goroutines inside a callback — they block the mailbox dispatcher.
+- **Never** use mutex, channel receive/send, `time.Sleep`, or spawned goroutines inside a callback - they block the mailbox dispatcher.
 - **Never** share mutable state between actors. Pass data by copy in messages.
 - **Never** hold a pointer to another actor's internal struct.
 - Use `any`, not `interface{}`.

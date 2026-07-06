@@ -37,7 +37,7 @@ When a signature or constant must be exact, verify at the source: `$(go env GOMO
 
 Non-negotiable. A violation is always a bug.
 
-1. **No blocking inside actor callbacks.** No mutex, no channel send/receive, no blocking I/O, no `time.Sleep`, no spawned goroutines. Callbacks run on the mailbox dispatcher and must return quickly.
+1. **A callback must never block for an unbounded time.** It runs on the mailbox dispatcher; while it blocks, the actor handles nothing else and every Call to it stalls - so every wait needs a hard deadline. Bounded I/O (an HTTP/DB/socket call with an explicit timeout) is fine. A mutex or channel is a last resort and only if it cannot wait indefinitely: `TryLock`, a `select` with a timeout, a non-blocking send/receive - never a naked `Lock()` or a bare `<-ch`. Even bounded, it stalls the actor for the whole timeout and deadlocks if the releaser waits on this actor, so prefer lock-free structures (`sync.Map`, `atomic`) and message passing. Never: `time.Sleep`, any deadline-less wait, or blocking on a goroutine you spawned. Keep every bound as small as the actor's responsiveness needs - "bounded" is the floor, not a licence for a 30s stall.
 2. **EDF types are registered in `init()` - never after node start.** Register nested types before parents. All cross-node struct fields must be Exported.
 3. **Meta processes cannot initiate `Call` and cannot create Link/Monitor.** They can receive Call (`HandleCall`), receive links/monitors, and send async messages. A synchronous Call to a stock meta blocks (its default HandleCall sends no response).
 4. **Production clusters use a central registrar.** Embedded registrar is dev-only. Pick etcd (≤ 70 nodes) or Saturn (100+).

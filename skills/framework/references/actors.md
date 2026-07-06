@@ -370,7 +370,7 @@ func (a *Counter) Terminate(reason error) {
 
 ## Anti-Patterns
 
-- **Never** use mutex, channel receive/send, `time.Sleep`, or spawned goroutines inside a callback - they block the mailbox dispatcher.
+- **Never block a callback for an unbounded time** - it runs on the mailbox dispatcher, so a deadline-less wait freezes the actor. Time-bounded I/O (a deadline'd HTTP/DB/socket call) is fine. A mutex or channel is a last resort and must be non-blocking or timeout-bounded (`TryLock`, `select` with timeout), never a naked `Lock()`, bare `<-ch`, or `time.Sleep`. A bounded mutex/channel still stalls the actor for its whole timeout and risks deadlock if the releaser waits on this actor - prefer lock-free structures (`sync.Map`, `atomic`) and messages.
 - **Never** share mutable state between actors. Pass data by copy in messages.
 - **Never** hold a pointer to another actor's internal struct.
 - Use `any`, not `interface{}`.
